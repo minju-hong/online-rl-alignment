@@ -1,0 +1,5 @@
+{"algo": "etc_cvxpy", "seed": 0, "file": "results/demo_20260127-125822/etc_cvxpy/seed_0.npz", "seconds": 2.7812}
+{"algo": "etc_cvxpy", "seed": 1, "file": "results/demo_20260127-125822/etc_cvxpy/seed_1.npz", "seconds": 2.6326}
+{"algo": "etc_cvxpy", "seed": 2, "file": "results/demo_20260127-125822/etc_cvxpy/seed_2.npz", "seconds": 2.5226}
+{"algo": "etc_cvxpy", "seed": 3, "file": "results/demo_20260127-125822/etc_cvxpy/seed_3.npz", "seconds": 2.3732}
+{"algo": "etc_cvxpy", "seed": 4, "file": "results/demo_20260127-125822/etc_cvxpy/seed_4.npz", "seconds": 2.7162}
