@@ -16,9 +16,11 @@ def mu_logistic(z):
     # If scalar in -> return Python float; else return ndarray
     return float(out) if np.isscalar(out) else out
 
-def mu_linear(z: float) -> float:
-    """Linear link mu(z) = 0.5 + 0.25 * z """
+
+def mu_linear(z):
+    """Linear link mu(z) = 0.5 + 0.25 * z, safely clipped to [0, 1]"""
     out = 0.5 + 0.25 * z
+    out = np.clip(out, 0.0, 1.0)
     return float(out) if np.isscalar(out) else out
 
 

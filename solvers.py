@@ -224,8 +224,8 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
     # The game is symmetric, so pi1 = pi2 = pi_star. Value is strictly 0.5.
     return pi_star, pi_star, 0.5, G
 
-    def estimate_theta_ridge_cvxpy(
-    phi1_list, 
+def estimate_theta_ridge_cvxpy(
+    phi1_list,
     phi2_list,
     r_list,
     *,
@@ -243,14 +243,14 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
 
     d = phi1_list[0].shape[0]
     Theta = cp.Variable((d, d))
-    
+
     # Skew-symmetry constraint
     constraints = [Theta + Theta.T == 0]
 
     # Vectorize inputs for CVXPY speed
     X_stack = np.array([np.outer(phi1_list[t], phi2_list[t]).flatten() for t in range(T_curr)])
     targets = 4.0 * (np.array(r_list) - 0.5)
-    
+
     # Loss: || X * vec(Theta) - targets ||^2 + lam * ||Theta||_F^2
     z = X_stack @ cp.vec(Theta)
     loss = cp.sum_squares(z - targets) + lam * cp.sum_squares(Theta)
