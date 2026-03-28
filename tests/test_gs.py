@@ -24,9 +24,9 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
-T = 100            
+T = 500            
 K = 10
-d = 40
+d = 10
 r = 1
 S = 4.0
 mu_name = "logistic"  # "logistic" or "linear"

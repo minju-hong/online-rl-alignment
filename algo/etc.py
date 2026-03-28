@@ -1,7 +1,8 @@
 import numpy as np
 import cvxpy as cp
 
-from solvers import bilinear_solver_unreg
+# --- [CHANGE]: Import the regularized solver! ---
+from solvers import bilinear_solver_reg
 
 def estimate_theta_cvxpy(
     phi1_list, 
@@ -11,17 +12,14 @@ def estimate_theta_cvxpy(
     lam: float = 0.5,
     skew: bool = True,
     frob_bound: float | None = None,
+    link_type: str = "logistic",
     solver: str = "SCS",
     max_iters: int = 10_000,
     verbose: bool = False,
 ):
     """
-    Convex nuclear-norm-regularized logistic MLE (solved once via CVXPY):
-      minimize (1/T0) sum_t [log(1+exp(z_t)) - r_t z_t] + lam ||Theta||_*
-      s.t. Theta + Theta^T = 0   (if skew)
-           ||Theta||_F <= frob_bound (optional)
-
-    z_t = <Theta, X_t>, X_t = phi1_t phi2_t^T.
+    Convex nuclear-norm-regularized MLE (solved once via CVXPY)
+    Supports both Logistic and Linear links.
     """
     T0 = len(r_list)
     if T0 == 0:
@@ -44,11 +42,21 @@ def estimate_theta_cvxpy(
     if frob_bound is not None:
         constraints.append(cp.norm(Theta, "fro") <= float(frob_bound))
 
-    loss_terms = []
-    for t in range(T0):
-        z_t = cp.sum(cp.multiply(Theta, X_list[t]))   # <Theta, X_t>
-        loss_terms.append(cp.logistic(z_t) - r[t] * z_t)
-    loss = (1.0 / T0) * cp.sum(loss_terms)
+    if link_type == "logistic":
+        loss_terms = []
+        for t in range(T0):
+            z_t = cp.sum(cp.multiply(Theta, X_list[t]))   
+            loss_terms.append(cp.logistic(z_t) - r[t] * z_t)
+        loss = (1.0 / T0) * cp.sum(loss_terms)
+        
+    elif link_type == "linear":
+        X_stack = np.array([x.flatten() for x in X_list])
+        targets = 4.0 * (r - 0.5)
+        z = X_stack @ cp.vec(Theta)
+        loss = (1.0 / T0) * cp.sum_squares(z - targets)
+        
+    else:
+        raise ValueError(f"Unknown link_type: {link_type}")
 
     reg = float(lam) * cp.normNuc(Theta) if lam > 0 else 0.0
     prob = cp.Problem(cp.Minimize(loss + reg), constraints)
@@ -74,36 +82,43 @@ def etc_s2p_cvxpy(
     *,
     T: int,
     T0: int,
-    rho,                    # exploration policy (K,) or callable -> (K,)
-    mu,                     # <<< you pass in mu here (e.g. env.mu_logistic or your own)
+    rho,                    
+    mu,                     
+    link_type: str = "logistic", 
+    eta: float = 1.0,               # --- [CHANGE]: Added eta parameter
+    reg_type: str = 'reverse_kl',   # --- [CHANGE]: Added reg_type parameter
     lam: float = 100.0,
     frob_bound: float | None = None,
     episode_seed: int = 0,
     cvx_solver: str = "SCS",
     cvx_max_iters: int = 10_000,
     cvx_verbose: bool = False,
-    commit_symmetric: bool = True,  # if True commit to (pi_hat, pi_hat)
+    commit_symmetric: bool = True,  
 ):
     """
-    Explore-Then-Commit algorithm using:
-      - env.step(...) for data collection
-      - CVXPY for Theta_hat (eq 6-7)
-      - your bilinear_solver_unreg(..., mu=mu) for Nash equilibrium (eq 5)
-
-    Returns dict with Theta_hat, equilibrium policies, and trajectory.
+    Explore-Then-Commit algorithm.
     """
     if not (1 <= T0 < T):
         raise ValueError("Need 1 <= T0 < T.")
 
-    # Make sure mu can be used inside bilinear_solver_unreg even if scalar-only
-
     env.reset_episode(T=T, episode_seed=episode_seed)
 
-    # ---- Exploration ----
     phi1_list, phi2_list, r_list = [], [], []
     traj = []
+    
+    pi1_seq = []
+    pi2_seq = []
+    
+    if callable(rho):
+        rho_arr = np.asarray(rho(0), dtype=float) 
+    else:
+        rho_arr = np.asarray(rho, dtype=float)
 
+    # ---- Exploration Phase ----
     for _ in range(T0):
+        pi1_seq.append(rho_arr.copy())
+        pi2_seq.append(rho_arr.copy())
+        
         x, a1, a2, r, p = env.step(rho, rho)
         traj.append((x, a1, a2, r, p))
         phi1_list.append(_get_phi(env, x, a1))
@@ -116,6 +131,7 @@ def etc_s2p_cvxpy(
         lam=lam,
         skew=True,
         frob_bound=frob_bound,
+        link_type=link_type,  
         solver=cvx_solver,
         max_iters=cvx_max_iters,
         verbose=cvx_verbose,
@@ -123,14 +139,16 @@ def etc_s2p_cvxpy(
 
     # ---- Nash equilibrium (Eq. 5) ----
     if env.Phi.ndim == 3:
-        Phi_table = env.Phi.mean(axis=0)   # (K,d) fallback for contextual
+        Phi_table = env.Phi.mean(axis=0)   
     else:
-        Phi_table = env.Phi               # (K,d)
+        Phi_table = env.Phi               
 
-    # IMPORTANT: call YOUR solver signature (keyword-only mu)
-    pi1_hat, pi2_hat, v_hat, G_hat = bilinear_solver_unreg(Phi_table, Theta_hat, mu=mu)
+    # --- [CHANGE]: Solve the Regularized game using the provided eta and reg_type ---
+    pi1_hat, pi2_hat, v_hat, G_hat = bilinear_solver_reg(
+        Phi_table, Theta_hat, mu=mu, eta=eta, reg_type=reg_type
+    )
 
-    # ---- Commit ----
+    # ---- Commit Phase ----
     if commit_symmetric:
         pi_commit_1 = pi1_hat
         pi_commit_2 = pi1_hat
@@ -139,6 +157,9 @@ def etc_s2p_cvxpy(
         pi_commit_2 = pi2_hat
 
     for _ in range(T0, T):
+        pi1_seq.append(pi_commit_1.copy())
+        pi2_seq.append(pi_commit_2.copy())
+        
         x, a1, a2, r, p = env.step(pi_commit_1, pi_commit_2)
         traj.append((x, a1, a2, r, p))
 
@@ -150,4 +171,6 @@ def etc_s2p_cvxpy(
         "v_hat": v_hat,
         "G_hat": G_hat,
         "traj": traj,
+        "pi1_seq": pi1_seq,
+        "pi2_seq": pi2_seq,
     }

@@ -14,10 +14,10 @@ def omg_s2p_cvxpy(
     *,
     T: int,
     mu,                     # MUST be mu_linear for OMG theory to hold
-    eta: float = 1.0,       # Regularization strength
+    eta: float = 1.0,       
     reg_type: str = 'reverse_kl', 
-    lam: float = 1.0,       # Ridge regularization parameter
-    alpha: float = 1.0,     # Optimistic Bonus scaling factor
+    lam: float = 1.0,       
+    alpha: float = 1.0,     
     update_freq: int = 1,   
     episode_seed: int = 0,
     cvx_solver: str = "SCS"
@@ -29,20 +29,19 @@ def omg_s2p_cvxpy(
 
     phi1_list, phi2_list, r_list = [], [], []
     traj = []
+    
+    # --- [CHANGE]: Track policy sequences for precise regret evaluation ---
+    pi1_seq = []
+    pi2_seq = []
 
     K, d = env.K, env.d
-    
-    # Initialize the inverse covariance matrix V^{-1} for the bonus calculation
-    # Since features are dxd matrices flattened to d^2, V is d^2 x d^2
     V_inv = np.eye(d * d) / lam
     
-    # Pre-calculate all pairwise flattened feature combinations for fast bonus math
     if env.Phi.ndim == 3:
         Phi_table = env.Phi.mean(axis=0)   
     else:
         Phi_table = env.Phi
         
-    # X_all shape: (K*K, d^2)
     X_all = np.einsum('id,jd->ijd', Phi_table, Phi_table).reshape(K * K, d * d)
 
     Theta_hat = np.zeros((d, d))
@@ -51,6 +50,10 @@ def omg_s2p_cvxpy(
     v_hat, G_hat = None, None
 
     for t in range(T):
+        # --- [CHANGE]: Record expected policies BEFORE stepping ---
+        pi1_seq.append(pi1_hat.copy())
+        pi2_seq.append(pi2_hat.copy())
+        
         # 1. Take a step using the optimistic policies
         x, a1, a2, r, p = env.step(pi1_hat, pi2_hat)
         traj.append((x, a1, a2, r, p))
@@ -80,27 +83,25 @@ def omg_s2p_cvxpy(
                 Phi_table, Theta_hat, mu=mu, eta=eta, reg_type=reg_type
             )
             
-            # Center the base payoff (skew-symmetric space)
             G_base = G_hat - 0.5
 
             # Step 6: Compute the Optimistic Bonus Matrix B_t
-            # B_t(i,j) = alpha * sqrt( X_ij^T * V_inv * X_ij )
             variance = np.sum((X_all @ V_inv) * X_all, axis=1).reshape(K, K)
             B_t = alpha * np.sqrt(np.clip(variance, 0, None))
 
             # Step 7: Compute Optimistic Best Responses
-            # Player 1 maximizes Base Payoff + Bonus
             pi1_hat = compute_best_response(pi_t, G_base + B_t, eta, reg_type)
-            
-            # Player 2 minimizes Base Payoff (which is maximizing -Base Payoff) + Bonus
             pi2_hat = compute_best_response(pi_t, -G_base + B_t.T, eta, reg_type)
 
     return {
         "Theta_hat": Theta_hat,
         "pi1_hat": pi1_hat,
         "pi2_hat": pi2_hat,
-        "pi_hat": pi1_hat, # Keeping alias for compatibility
+        "pi_hat": pi1_hat, 
         "v_hat": v_hat,
         "G_hat": G_hat,
         "traj": traj,
+        # --- [CHANGE]: Return the tracked sequences ---
+        "pi1_seq": pi1_seq,
+        "pi2_seq": pi2_seq,
     }

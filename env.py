@@ -50,12 +50,25 @@ class GBPMEnv:
         norms = np.linalg.norm(Phi, axis=1, keepdims=True)
         norms = np.where(norms == 0.0, 1.0, norms)
 
-        Phi = 10.0 * Phi / norms   # now every row has norm exactly 3 (up to floating error)
+        Phi = 1.0 * Phi / norms   # now every row has norm exactly 1 (up to floating error)
         self.Phi = Phi
 
 
         # Ground-truth parameter Theta_star
         self.Theta_star = self._make_theta_star()
+
+        # --- THE PLANTING TRICK ---
+        # Extract the principal directions of the true matrix
+        U, _, Vh = np.linalg.svd(self.Theta_star)
+        
+        # Plant the top singular vectors into the first two arms
+        if self.K >= 2:
+            self.Phi[0] = U[:, 0]  # The direction of maximum variance
+            self.Phi[1] = Vh[0, :] # The corresponding orthogonal direction
+            
+            # Ensure they maintain the same feature norm as the rest of the arms
+            self.Phi[0] /= np.linalg.norm(self.Phi[0])
+            self.Phi[1] /= np.linalg.norm(self.Phi[1])
 
         # Episode state
         self.u_seq = None

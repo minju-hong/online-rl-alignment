@@ -24,10 +24,10 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
-T = 300            
-T0 = 60            
+T = 600            
+T0 = 150            
 K = 10
-d = 10             
+d = 20             
 r = 1              
 S = 4.0
 mu_name = "logistic"  
@@ -35,7 +35,7 @@ instance_seed = 0
 seeds = [0, 1, 2, 3, 4]
 
 # ETC-specific knobs.
-lam = 0.01
+lam = 0.1
 frob_bound = None
 cvx_solver = "SCS"
 cvx_max_iters = 10_000
