@@ -23,6 +23,19 @@ def mu_linear(z):
     out = np.clip(out, 0.0, 1.0)
     return float(out) if np.isscalar(out) else out
 
+def random_policy_dirichlet(K: int) -> np.ndarray:
+    """
+    Draws a perfectly uniform random probability distribution.
+    Requires an alpha array (we use ones for a uniform prior).
+    """
+    return np.random.dirichlet(np.ones(K))
+
+def random_policy_uniform(K: int) -> np.ndarray:
+    """
+    Quickly normalizes standard uniform noise.
+    """
+    p = np.random.rand(K)
+    return p / np.sum(p)
 
 class GBPMEnv:
     def __init__(

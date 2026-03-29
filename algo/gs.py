@@ -142,7 +142,8 @@ def gs_s2p_cvxpy(
                 Theta_hat, 
                 mu=mu, 
                 eta=eta, 
-                reg_type=reg_type
+                reg_type=reg_type,
+                ref_policy = rho
             )
 
     return {

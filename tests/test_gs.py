@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 # Adjust this import if your file is named ours_gs.py instead of gs.py
 from algo.gs import gs_s2p_cvxpy
-from env import GBPMEnv, mu_linear, mu_logistic
+from env import GBPMEnv, mu_linear, mu_logistic, random_policy_dirichlet, random_policy_uniform
 import plot
 import regret as reg
 
@@ -24,8 +24,8 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
-T = 500            
-K = 10
+T = 1000            
+K = 50
 d = 10
 r = 1
 S = 4.0
@@ -36,7 +36,7 @@ seeds = [0, 1, 2, 3, 4]
 # GS-specific knobs.
 gs_eta = 1       
 reg_type = "reverse_kl"  
-update_freq = 2    
+update_freq = 5    
 
 # CVX options.
 cvx_solver = "SCS"
@@ -75,7 +75,7 @@ def run_one_seed(seed: int) -> dict[str, Any]:
     env.step = step_wrapper
     # ------------------------------
 
-    rho = np.ones(env.K) / env.K # Uniform
+    rho = random_policy_uniform(K) # Uniform
     out = gs_s2p_cvxpy(
         env,
         T=T,

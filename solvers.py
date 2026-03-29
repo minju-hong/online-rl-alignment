@@ -150,40 +150,98 @@ def project_simplex(v):
     theta = (cssv[rho] - 1) / (rho + 1.0)
     return np.maximum(v - theta, 0)
 
-def compute_best_response(q, G_tilde, eta, reg_type):
+def compute_best_response(q: np.ndarray, G: np.ndarray, eta: float, reg_type: str, ref_policy=None) -> np.ndarray:
     """
-    Computes the regularized best response to an opponent's policy q.
+    Compute the regularized best response against opponent policy q.
     """
-    K = len(q)
-    u = G_tilde @ q  # Utility vector against policy q
+    K = G.shape[0]
     
+    # Safely handle the reference policy
+    if ref_policy is None:
+        ref_policy = np.ones(K) / K
+    else:
+        ref_policy = np.asarray(ref_policy, dtype=float)
+
+    # Calculate the expected rewards for each action against q
+    expected_rewards = G @ q
+
     if reg_type == 'reverse_kl':
-        # Softmax with numerical stability trick
-        scaled_u = eta * u
-        scaled_u -= np.max(scaled_u)
-        exp_u = np.exp(scaled_u)
-        return exp_u / np.sum(exp_u)
+        # pi_i \propto \rho_i * exp(\eta * expected_rewards_i)
+        logits = eta * expected_rewards
+        logits -= np.max(logits) 
+        pi = ref_policy * np.exp(logits)
+        pi_sum = np.sum(pi)
+        if pi_sum > 0:
+            pi /= pi_sum
+        else:
+            pi = np.ones(K) / K
+        return pi
         
+    elif reg_type == 'shannon':
+        # Standard Softmax (Implicitly uniform reference)
+        logits = eta * expected_rewards
+        logits -= np.max(logits)
+        pi = np.exp(logits)
+        pi /= np.sum(pi)
+        return pi
+
     elif reg_type == 'tsallis':
-        # Tsallis translates to a direct Euclidean projection
-        target = eta * u
-        return project_simplex(target)
-        
+        # Tsallis (q=2) is a Euclidean projection
+        # pi = Proj_simplex(rho + eta * expected_rewards)
+        target_vec = ref_policy + eta * expected_rewards
+        return project_simplex(target_vec)
+
     elif reg_type == 'chi_squared':
-        # Chi-squared translates to a shifted Euclidean projection
-        target = (1.0 / K) + (eta / (2.0 * K)) * u
-        return project_simplex(target)
+        # Chi-Squared projection requires finding lambda via bisection
+        # pi_i = max(0, rho_i * (1 + eta * expected_rewards_i - lambda))
+        v = eta * expected_rewards
+        
+        # Mask out near-zero rho to prevent division by zero in bounds
+        valid_rho = ref_policy[ref_policy > 1e-12]
+        if len(valid_rho) == 0:
+            return np.ones(K) / K
+            
+        # Initialize bisection bounds for lambda
+        low = np.min(v) - 1.0 / np.min(valid_rho)
+        high = np.max(v) + 1.0
+        
+        # 50 iterations of bisection guarantees machine-level float64 precision
+        for _ in range(50):
+            mid = (low + high) / 2.0
+            pi = np.maximum(0.0, ref_policy * (1.0 + v - mid))
+            if np.sum(pi) > 1.0:
+                low = mid
+            else:
+                high = mid
+                
+        # Final calculation with the converged lambda (high)
+        pi = np.maximum(0.0, ref_policy * (1.0 + v - high))
+        
+        # Clean up floating point errors to guarantee exact sum to 1.0
+        pi_sum = np.sum(pi)
+        if pi_sum > 0:
+            pi /= pi_sum
+        else:
+            pi = np.ones(K) / K
+            
+        return pi
         
     else:
-        raise ValueError(f"Unknown regularizer type: {reg_type}")
+        raise ValueError(f"Unknown regularization type: {reg_type}")
 
-def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, eta=1.0, reg_type='reverse_kl'):
+def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, eta=1.0, reg_type='reverse_kl', ref_policy=None):
     """
     Solve the REGULARIZED symmetric zero-sum game.
     """
     Phi = np.asarray(Phi, dtype=float)
     Theta = np.asarray(Theta, dtype=float)
     K = Phi.shape[0]
+
+    # Handle the reference policy
+    if ref_policy is None:
+        ref_policy = np.ones(K) / K
+    else:
+        ref_policy = np.asarray(ref_policy, dtype=float)
 
     # Build payoff matrix G
     Z = Phi @ Theta @ Phi.T
@@ -202,7 +260,8 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
         else:
             p_clean = np.ones(K) / K
             
-        br = compute_best_response(p_clean, G_tilde, eta, reg_type)
+        # Pass the ref_policy down to the best response calculator
+        br = compute_best_response(p_clean, G_tilde, eta, reg_type, ref_policy)
         return p_clean - br
 
     # Initial guess is the uniform distribution
@@ -215,7 +274,7 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
         # Fallback to a simple iterative fixed-point loop if the root finder fails
         p = p0
         for _ in range(500):
-            p = 0.5 * p + 0.5 * compute_best_response(p, G_tilde, eta, reg_type)
+            p = 0.5 * p + 0.5 * compute_best_response(p, G_tilde, eta, reg_type, ref_policy)
             
     # Clean up final policy
     pi_star = np.clip(res.x, 0.0, None)

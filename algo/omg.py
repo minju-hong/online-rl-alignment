@@ -42,7 +42,9 @@ def omg_s2p_cvxpy(
     else:
         Phi_table = env.Phi
         
-    X_all = np.einsum('id,jd->ijd', Phi_table, Phi_table).reshape(K * K, d * d)
+    # Build all pairwise outer products phi_i phi_j^T as flattened (d*d,) vectors.
+    # Shape after einsum: (K, K, d, d) -> reshape to (K*K, d*d).
+    X_all = np.einsum("ia,jb->ijab", Phi_table, Phi_table).reshape(K * K, d * d)
 
     Theta_hat = np.zeros((d, d))
     pi1_hat = np.ones(K) / K
