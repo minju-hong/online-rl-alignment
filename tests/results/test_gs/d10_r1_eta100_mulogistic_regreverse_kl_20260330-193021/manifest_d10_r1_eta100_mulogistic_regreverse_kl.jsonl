@@ -1,5 +1,0 @@
-{"algo": "gs_cvxpy", "seed": 0, "file": "results/test_gs/d10_r1_eta100_mulogistic_regreverse_kl_20260330-193021/gs_cvxpy/seed_0_d10_r1_eta100_mulogistic_regreverse_kl.npz", "seconds": 189.8691}
-{"algo": "gs_cvxpy", "seed": 1, "file": "results/test_gs/d10_r1_eta100_mulogistic_regreverse_kl_20260330-193021/gs_cvxpy/seed_1_d10_r1_eta100_mulogistic_regreverse_kl.npz", "seconds": 186.4532}
-{"algo": "gs_cvxpy", "seed": 2, "file": "results/test_gs/d10_r1_eta100_mulogistic_regreverse_kl_20260330-193021/gs_cvxpy/seed_2_d10_r1_eta100_mulogistic_regreverse_kl.npz", "seconds": 185.5964}
-{"algo": "gs_cvxpy", "seed": 3, "file": "results/test_gs/d10_r1_eta100_mulogistic_regreverse_kl_20260330-193021/gs_cvxpy/seed_3_d10_r1_eta100_mulogistic_regreverse_kl.npz", "seconds": 185.663}
-{"algo": "gs_cvxpy", "seed": 4, "file": "results/test_gs/d10_r1_eta100_mulogistic_regreverse_kl_20260330-193021/gs_cvxpy/seed_4_d10_r1_eta100_mulogistic_regreverse_kl.npz", "seconds": 185.4675}

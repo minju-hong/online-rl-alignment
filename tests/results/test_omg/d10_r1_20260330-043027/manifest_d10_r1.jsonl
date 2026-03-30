@@ -1,5 +1,0 @@
-{"algo": "omg_cvxpy", "seed": 0, "file": "results/test_omg/d10_r1_20260330-043027/omg_cvxpy/seed_0_d10_r1.npz", "seconds": 50.6045}
-{"algo": "omg_cvxpy", "seed": 1, "file": "results/test_omg/d10_r1_20260330-043027/omg_cvxpy/seed_1_d10_r1.npz", "seconds": 48.6394}
-{"algo": "omg_cvxpy", "seed": 2, "file": "results/test_omg/d10_r1_20260330-043027/omg_cvxpy/seed_2_d10_r1.npz", "seconds": 37.2975}
-{"algo": "omg_cvxpy", "seed": 3, "file": "results/test_omg/d10_r1_20260330-043027/omg_cvxpy/seed_3_d10_r1.npz", "seconds": 26.9267}
-{"algo": "omg_cvxpy", "seed": 4, "file": "results/test_omg/d10_r1_20260330-043027/omg_cvxpy/seed_4_d10_r1.npz", "seconds": 27.4995}

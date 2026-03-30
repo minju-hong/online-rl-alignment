@@ -146,7 +146,140 @@ def compute_best_response(q: np.ndarray, G: np.ndarray, eta: float, reg_type: st
     else:
         raise ValueError(f"Unknown regularization type: {reg_type}")
 
-def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, eta=1.0, reg_type='reverse_kl', ref_policy=None):
+def _solve_br_fixed_point_symmetric(
+    G_tilde: np.ndarray,
+    *,
+    eta: float,
+    reg_type: str,
+    ref_policy: np.ndarray,
+    tol: float = 1e-8,
+    max_iters_per_stage: int = 6000,
+    verbose: bool = False,
+) -> tuple[np.ndarray, float, bool]:
+    """
+    Robustly solve p = BR_eta(p) for symmetric regularized game.
+
+    Uses eta-continuation + adaptive damping to avoid high-eta stalling.
+    """
+    K = G_tilde.shape[0]
+    p = np.asarray(ref_policy, dtype=float).reshape(K)
+    p = np.clip(p, 0.0, None)
+    p = p / p.sum() if p.sum() > 0 else (np.ones(K) / K)
+
+    eta = float(max(1e-12, eta))
+    if eta <= 10.0:
+        eta_stages = [eta]
+    else:
+        n = int(np.ceil(np.log2(eta / 10.0))) + 2
+        eta_stages = [10.0] + list(np.geomspace(10.0, eta, n))
+        eta_stages = [float(x) for x in eta_stages]
+
+    final_res = np.inf
+    converged = False
+    for stage_idx, eta_stage in enumerate(eta_stages):
+        stage_tol = tol if stage_idx == (len(eta_stages) - 1) else max(1e-6, 10.0 * tol)
+        alpha = 1.0
+
+        def br_fn(v: np.ndarray) -> np.ndarray:
+            return compute_best_response(v, G_tilde, eta_stage, reg_type, ref_policy=ref_policy)
+
+        for _ in range(int(max_iters_per_stage)):
+            br = br_fn(p)
+            res = float(np.max(np.abs(br - p)))
+            if res <= stage_tol:
+                final_res = res
+                converged = (stage_idx == len(eta_stages) - 1)
+                break
+
+            accepted = False
+            alpha_try = alpha
+            while alpha_try >= 1e-6:
+                cand = (1.0 - alpha_try) * p + alpha_try * br
+                cand = np.clip(cand, 0.0, None)
+                cand = cand / cand.sum() if cand.sum() > 0 else (np.ones(K) / K)
+                br_cand = br_fn(cand)
+                res_cand = float(np.max(np.abs(br_cand - cand)))
+                # Accept if residual decreases sufficiently.
+                if res_cand <= (1.0 - 1e-3 * alpha_try) * res:
+                    p = cand
+                    final_res = res_cand
+                    alpha = min(1.0, alpha_try * 1.25)
+                    accepted = True
+                    break
+                alpha_try *= 0.5
+
+            if not accepted:
+                # Fallback to conservative Mann step.
+                p = 0.5 * p + 0.5 * br
+                p = np.clip(p, 0.0, None)
+                p = p / p.sum() if p.sum() > 0 else (np.ones(K) / K)
+                alpha = 0.5
+                final_res = float(np.max(np.abs(br_fn(p) - p)))
+
+        if verbose:
+            print(f"[bilinear_solver_reg] stage eta={eta_stage:.3g}, resid={final_res:.3e}")
+
+    return p, float(final_res), bool(converged and final_res <= tol)
+
+
+def _solve_reverse_kl_symmetric_root(
+    G_tilde: np.ndarray,
+    *,
+    eta: float,
+    ref_policy: np.ndarray,
+    tol: float = 1e-10,
+    maxfev: int = 5000,
+) -> tuple[np.ndarray, float, bool]:
+    """
+    Solve symmetric reverse-KL fixed point exactly in log-ratio coordinates.
+
+    Fixed point p = BR(p) is equivalent to:
+      u_i = eta * ((G p)_i - (G p)_K),  i=1..K-1
+    with p_i proportional to rho_i * exp(u_i), and u_K = 0.
+    """
+    K = G_tilde.shape[0]
+    if K == 1:
+        return np.array([1.0]), 0.0, True
+
+    rho = np.asarray(ref_policy, dtype=float).reshape(K)
+    rho = np.clip(rho, 1e-15, None)
+    rho = rho / rho.sum()
+
+    log_rho = np.log(rho)
+
+    def p_from_u(u: np.ndarray) -> np.ndarray:
+        u = np.asarray(u, dtype=float).reshape(K - 1)
+        u_full = np.concatenate([u, np.array([0.0])])
+        logits = log_rho + u_full
+        logits -= np.max(logits)
+        w = np.exp(logits)
+        return w / w.sum()
+
+    def F(u: np.ndarray) -> np.ndarray:
+        p = p_from_u(u)
+        g = G_tilde @ p
+        return u - eta * (g[:-1] - g[-1])
+
+    sol = root(F, np.zeros(K - 1), method="hybr", options={"xtol": float(tol), "maxfev": int(maxfev)})
+    p = p_from_u(sol.x)
+    br = compute_best_response(p, G_tilde, eta, "reverse_kl", ref_policy=rho)
+    resid = float(np.max(np.abs(br - p)))
+    success = bool(sol.success and np.isfinite(resid))
+    return p, resid, success
+
+
+def bilinear_solver_reg(
+    Phi: np.ndarray,
+    Theta: np.ndarray,
+    *,
+    mu=mu_logistic,
+    eta=1.0,
+    reg_type='reverse_kl',
+    ref_policy=None,
+    tol: float = 1e-8,
+    max_iters: int = 6000,
+    verbose: bool = False,
+):
     """
     Solve the REGULARIZED symmetric zero-sum game using Damped Best Response iteration.
     """
@@ -167,26 +300,41 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
     # Center the matrix to make it strictly skew-symmetric (for symmetric game properties)
     G_tilde = G - 0.5 
 
-    # --- PRIMARY SOLVER: Damped Best Response (Mann Iteration) ---
-    # We drop scipy.optimize.root completely because the Jacobian approximations
-    # fail violently against the hard clipping boundaries of Tsallis/Chi-Squared.
-    
-    p = np.ones(K) / K  # Start at uniform distribution
-    alpha = 0.5         # Damping factor to guarantee convergence
-    max_iters = 1000
-    tol = 1e-6
-    
-    for _ in range(max_iters):
-        # Compute exact best response using your perfectly implemented KKT oracle
-        br = compute_best_response(p, G_tilde, eta, reg_type, ref_policy)
-        
-        # Check L-infinity norm for convergence
-        if np.max(np.abs(br - p)) < tol:
-            p = br
-            break
-            
-        # Update policy via convex combination (guarantees we stay on the simplex)
-        p = (1.0 - alpha) * p + alpha * br
+    # Robust solvers for symmetric fixed-point p = BR_eta(p).
+    if reg_type in {"reverse_kl", "shannon"}:
+        rho_eff = ref_policy if reg_type == "reverse_kl" else (np.ones(K) / K)
+        p, fp_resid, converged = _solve_reverse_kl_symmetric_root(
+            G_tilde,
+            eta=float(eta),
+            ref_policy=rho_eff,
+            tol=min(float(tol), 1e-10),
+            maxfev=max(2000, int(max_iters)),
+        )
+        # Safety fallback if root solver fails.
+        if (not converged) or (fp_resid > 10.0 * float(tol)):
+            p, fp_resid, converged = _solve_br_fixed_point_symmetric(
+                G_tilde,
+                eta=float(eta),
+                reg_type=reg_type,
+                ref_policy=ref_policy,
+                tol=float(tol),
+                max_iters_per_stage=int(max_iters),
+                verbose=bool(verbose),
+            )
+    else:
+        p, fp_resid, converged = _solve_br_fixed_point_symmetric(
+            G_tilde,
+            eta=float(eta),
+            reg_type=reg_type,
+            ref_policy=ref_policy,
+            tol=float(tol),
+            max_iters_per_stage=int(max_iters),
+            verbose=bool(verbose),
+        )
+
+    if verbose:
+        msg = "converged" if converged else "not_converged"
+        print(f"[bilinear_solver_reg] {msg}, fixed_point_resid={fp_resid:.3e}, eta={eta}, reg={reg_type}")
             
     # Clean up final policy to ensure absolute numerical strictness
     pi_star = np.clip(p, 0.0, None)
@@ -199,6 +347,225 @@ def bilinear_solver_reg(Phi: np.ndarray, Theta: np.ndarray, *, mu=mu_logistic, e
     # The game is symmetric, so pi1 = pi2 = pi_star. Value is strictly 0.5.
     return pi_star, pi_star, 0.5, G
 
+
+def fixed_point_residual(
+    p: np.ndarray,
+    G: np.ndarray,
+    *,
+    eta: float,
+    reg_type: str,
+    ref_policy: np.ndarray | None = None,
+) -> float:
+    """
+    Compute ||BR(p) - p||_inf for the centered symmetric game.
+    """
+    p = np.asarray(p, dtype=float).reshape(-1)
+    G = np.asarray(G, dtype=float)
+    br = compute_best_response(p, G - 0.5, float(eta), reg_type, ref_policy=ref_policy)
+    return float(np.max(np.abs(br - p)))
+
+
+def _project_skew_frob(theta: np.ndarray, frob_bound: float | None = None) -> np.ndarray:
+    """Project to skew-symmetric matrices and optional Frobenius ball."""
+    theta = 0.5 * (theta - theta.T)
+    if frob_bound is not None:
+        bound = float(frob_bound)
+        if bound <= 0:
+            return np.zeros_like(theta)
+        nrm = float(np.linalg.norm(theta, ord="fro"))
+        if nrm > bound:
+            theta = theta * (bound / (nrm + 1e-12))
+    return theta
+
+
+def estimate_theta_logistic_projected(
+    phi1_list,
+    phi2_list,
+    r_list,
+    *,
+    l2: float = 0.0,
+    frob_bound: float | None = None,
+    max_iters: int = 2000,
+    tol: float = 1e-7,
+    step_init: float = 1.0,
+    line_search_beta: float = 0.5,
+    line_search_c: float = 1e-4,
+    min_step: float = 1e-10,
+    warm_start: np.ndarray | None = None,
+    verbose: bool = False,
+) -> np.ndarray:
+    """
+    Efficient projected-gradient solver for logistic MLE with skew constraint.
+
+    Objective:
+      (1/T) * sum_t [log(1+exp(z_t)) - r_t z_t] + 0.5*l2*||Theta||_F^2
+      where z_t = phi1_t^T Theta phi2_t
+    subject to:
+      Theta + Theta^T = 0, and optionally ||Theta||_F <= frob_bound.
+    """
+    T = len(r_list)
+    if T == 0:
+        raise ValueError("Need at least one sample to estimate Theta.")
+
+    phi1 = np.asarray(phi1_list, dtype=float)
+    phi2 = np.asarray(phi2_list, dtype=float)
+    r = np.asarray(r_list, dtype=float).reshape(-1)
+    if phi1.ndim != 2 or phi2.ndim != 2:
+        raise ValueError("phi1_list and phi2_list must be arrays of vectors.")
+    if phi1.shape != phi2.shape:
+        raise ValueError(f"phi1/phi2 shape mismatch: {phi1.shape} vs {phi2.shape}")
+    if phi1.shape[0] != T:
+        raise ValueError("Number of feature rows must match len(r_list).")
+
+    d = phi1.shape[1]
+    if warm_start is None:
+        theta = np.zeros((d, d), dtype=float)
+    else:
+        theta = np.asarray(warm_start, dtype=float).reshape(d, d)
+    theta = _project_skew_frob(theta, frob_bound)
+
+    l2 = float(max(0.0, l2))
+    T_inv = 1.0 / float(T)
+
+    def obj_grad(theta_curr: np.ndarray) -> tuple[float, np.ndarray]:
+        z = np.einsum("ti,ij,tj->t", phi1, theta_curr, phi2, optimize=True)
+        z_clip = np.clip(z, -50.0, 50.0)
+        sig = 1.0 / (1.0 + np.exp(-z_clip))
+        loss = float(np.mean(np.log1p(np.exp(z_clip)) - r * z_clip))
+        if l2 > 0:
+            loss += 0.5 * l2 * float(np.sum(theta_curr * theta_curr))
+
+        w = (sig - r) * T_inv
+        grad = phi1.T @ (w[:, None] * phi2)
+        if l2 > 0:
+            grad = grad + l2 * theta_curr
+        grad = 0.5 * (grad - grad.T)
+        return loss, grad
+
+    f_curr, g_curr = obj_grad(theta)
+    for it in range(int(max_iters)):
+        g_norm = float(np.linalg.norm(g_curr, ord="fro"))
+        if g_norm <= tol:
+            break
+
+        step = float(step_init)
+        accepted = False
+        while step >= min_step:
+            theta_try = _project_skew_frob(theta - step * g_curr, frob_bound)
+            f_try, _ = obj_grad(theta_try)
+            if f_try <= f_curr - line_search_c * step * (g_norm ** 2):
+                theta = theta_try
+                f_curr = f_try
+                accepted = True
+                break
+            step *= line_search_beta
+
+        if not accepted:
+            break
+
+        _, g_curr = obj_grad(theta)
+        if verbose and (it + 1) % 100 == 0:
+            print(f"[logistic-pg] iter={it+1}, obj={f_curr:.6e}, grad_fro={g_norm:.3e}, step={step:.2e}")
+
+    return theta
+
+
+def init_theta_logistic_onepass_ons(
+    d: int,
+    *,
+    a0: float = 1.0,
+    step_size: float = 1.0,
+    frob_bound: float | None = None,
+    hess_floor: float = 1e-6,
+    hess_cap: float = 0.25,
+    warm_start: np.ndarray | None = None,
+) -> dict:
+    """
+    Initialize one-pass ONS state for logistic bilinear model in vec(theta) space.
+    """
+    d = int(d)
+    if d <= 0:
+        raise ValueError(f"d must be positive. Got d={d}")
+    a0 = float(a0)
+    if a0 <= 0:
+        raise ValueError(f"a0 must be positive. Got a0={a0}")
+
+    dim = d * d
+    if warm_start is None:
+        theta_mat = np.zeros((d, d), dtype=float)
+    else:
+        theta_mat = np.asarray(warm_start, dtype=float).reshape(d, d)
+    theta_mat = _project_skew_frob(theta_mat, frob_bound)
+    theta_vec = theta_mat.reshape(-1, order="F")
+
+    return {
+        "d": d,
+        "theta_vec": theta_vec,
+        "A_inv": np.eye(dim, dtype=float) / a0,
+        "step_size": float(step_size),
+        "frob_bound": frob_bound,
+        "hess_floor": float(max(0.0, hess_floor)),
+        "hess_cap": float(max(0.0, hess_cap)),
+        "t": 0,
+    }
+
+
+def update_theta_logistic_onepass_ons(
+    state: dict,
+    phi1_t: np.ndarray,
+    phi2_t: np.ndarray,
+    r_t: float,
+) -> tuple[np.ndarray, dict]:
+    """
+    One-pass ONS update:
+      A_t = A_{t-1} + h_t x_t x_t^T,  h_t ~= sigma(z_t)(1-sigma(z_t))
+      theta_t = Proj(theta_{t-1} - eta * A_t^{-1} g_t)
+    where g_t = (sigma(z_t) - r_t) x_t.
+    """
+    d = int(state["d"])
+    theta_vec = np.asarray(state["theta_vec"], dtype=float).reshape(-1)
+    A_inv = np.asarray(state["A_inv"], dtype=float)
+
+    phi1_t = np.asarray(phi1_t, dtype=float).reshape(d)
+    phi2_t = np.asarray(phi2_t, dtype=float).reshape(d)
+    r_t = float(r_t)
+
+    x_t = np.outer(phi1_t, phi2_t).reshape(-1, order="F")
+    z_t = float(theta_vec @ x_t)
+    z_clip = float(np.clip(z_t, -50.0, 50.0))
+    p_t = 1.0 / (1.0 + np.exp(-z_clip))
+    grad = (p_t - r_t) * x_t
+
+    h_floor = float(state.get("hess_floor", 1e-6))
+    h_cap = float(state.get("hess_cap", 0.25))
+    h_t = float(np.clip(p_t * (1.0 - p_t), h_floor, h_cap))
+    u = np.sqrt(h_t) * x_t
+
+    # Sherman-Morrison update for A_inv with rank-1 outer product u u^T.
+    Au = A_inv @ u
+    denom = 1.0 + float(u @ Au)
+    if denom > 1e-12:
+        A_inv = A_inv - np.outer(Au, Au) / denom
+
+    eta = float(state.get("step_size", 1.0))
+    theta_vec = theta_vec - eta * (A_inv @ grad)
+
+    theta_mat = theta_vec.reshape((d, d), order="F")
+    theta_mat = _project_skew_frob(theta_mat, state.get("frob_bound", None))
+    theta_vec = theta_mat.reshape(-1, order="F")
+
+    state["theta_vec"] = theta_vec
+    state["A_inv"] = A_inv
+    state["t"] = int(state.get("t", 0)) + 1
+
+    stats = {
+        "p_t": float(p_t),
+        "z_t": float(z_t),
+        "h_t": float(h_t),
+        "grad_norm": float(np.linalg.norm(grad)),
+    }
+    return theta_mat, stats
+
 def estimate_theta_ridge_cvxpy(
     phi1_list,
     phi2_list,
@@ -209,8 +576,8 @@ def estimate_theta_ridge_cvxpy(
 ):
     """
     Skew-Symmetric Ridge Regression for the Linear Link function.
-    Because mu(z) = 0.5 + 0.25*z, E[r_t] = 0.5 + 0.25*<Theta, X_t>.
-    Therefore, the regression target for <Theta, X_t> is 4 * (r_t - 0.5).
+    Because mu(z) = 0.5 + 0.125*z, E[r_t] = 0.5 + 0.125*<Theta, X_t>.
+    Therefore, the regression target for <Theta, X_t> is 8 * (r_t - 0.5).
     """
     T_curr = len(r_list)
     if T_curr == 0:
@@ -224,7 +591,7 @@ def estimate_theta_ridge_cvxpy(
 
     # Vectorize inputs for CVXPY speed
     X_stack = np.array([np.outer(phi1_list[t], phi2_list[t]).flatten('F') for t in range(T_curr)])
-    targets = 4.0 * (np.array(r_list) - 0.5)
+    targets = 8.0 * (np.array(r_list) - 0.5)
 
     # Loss: || X * vec(Theta) - targets ||^2 + lam * ||Theta||_F^2
     z = X_stack @ cp.vec(Theta)

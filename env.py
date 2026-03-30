@@ -17,7 +17,7 @@ def mu_logistic(z):
     return float(out) if np.isscalar(out) else out
 
 def mu_linear(z):
-    """Linear link mu(z) = 0.5 + 0.25 * z, safely clipped to [0, 1]"""
+    """Linear link mu(z) = 0.5 + 0.125 * z, safely clipped to [0, 1]."""
     out = 0.5 + 0.125 * z
     out = np.clip(out, 0.0, 1.0)
     return float(out) if np.isscalar(out) else out
@@ -57,7 +57,8 @@ class GBPMEnv:
 
         # Select the first K standard basis vectors
         if self.K > self.d:
-            raise ValueError(f"Cannot select K={self.K} standard basis vectors in d={self.d} dimensions.")
+            self.K = self.d
+            # raise ValueError(f"Cannot select K={self.K} standard basis vectors in d={self.d} dimensions.")
         self.Phi = np.eye(self.d)[:self.K]
 
         # # Known feature table Phi[a] (this plays the role of phi(a), since |X|=1)

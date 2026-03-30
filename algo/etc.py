@@ -2,7 +2,11 @@ import numpy as np
 import cvxpy as cp
 
 # --- [CHANGE]: Import the regularized solver! ---
-from solvers import bilinear_solver_reg
+from solvers import (
+    bilinear_solver_reg,
+    init_theta_logistic_onepass_ons,
+    update_theta_logistic_onepass_ons,
+)
 
 def estimate_theta_cvxpy(
     phi1_list, 
@@ -12,14 +16,13 @@ def estimate_theta_cvxpy(
     lam: float = 0.5,
     skew: bool = True,
     frob_bound: float | None = None,
-    link_type: str = "logistic",
+    link_type: str = "linear",
     solver: str = "SCS",
     max_iters: int = 10_000,
     verbose: bool = False,
 ):
     """
-    Convex nuclear-norm-regularized MLE (solved once via CVXPY)
-    Supports both Logistic and Linear links.
+    Convex CVXPY estimator for the linear link only.
     """
     T0 = len(r_list)
     if T0 == 0:
@@ -42,17 +45,12 @@ def estimate_theta_cvxpy(
     if frob_bound is not None:
         constraints.append(cp.norm(Theta, "fro") <= float(frob_bound))
 
-    if link_type == "logistic":
-        loss_terms = []
-        for t in range(T0):
-            z_t = cp.sum(cp.multiply(Theta, X_list[t]))   
-            loss_terms.append(cp.logistic(z_t) - r[t] * z_t)
-        loss = (1.0 / T0) * cp.sum(loss_terms)
-        
-    elif link_type == "linear":
-        X_stack = np.array([x.flatten() for x in X_list])
-        targets = 4.0 * (r - 0.5)
-        z = X_stack @ cp.vec(Theta)
+    if link_type == "linear":
+        # Keep vectorization consistent with cvxpy's column-major vec(Theta).
+        X_stack = np.array([x.flatten(order="F") for x in X_list])
+        # Invert mu_linear(z)=0.5+0.125*z  =>  z = 8*(r-0.5)
+        targets = 8.0 * (r - 0.5)
+        z = X_stack @ cp.vec(Theta, order="F")
         loss = (1.0 / T0) * cp.sum_squares(z - targets)
         
     else:
@@ -93,7 +91,12 @@ def etc_s2p_cvxpy(
     cvx_solver: str = "SCS",
     cvx_max_iters: int = 10_000,
     cvx_verbose: bool = False,
-    commit_symmetric: bool = True,  
+    commit_symmetric: bool = True,
+    theta_estimator: str = "onepass_ons",
+    ons_a0: float = 1.0,
+    ons_step_size: float = 1.0,
+    ons_hess_floor: float = 1e-6,
+    ons_hess_cap: float = 0.25,
 ):
     """
     Explore-Then-Commit algorithm.
@@ -126,16 +129,37 @@ def etc_s2p_cvxpy(
         r_list.append(float(r))
 
     # ---- Estimate Theta_hat ----
-    Theta_hat = estimate_theta_cvxpy(
-        phi1_list, phi2_list, r_list,
-        lam=lam,
-        skew=True,
-        frob_bound=frob_bound,
-        link_type=link_type,  
-        solver=cvx_solver,
-        max_iters=cvx_max_iters,
-        verbose=cvx_verbose,
-    )
+    if link_type == "logistic":
+        if theta_estimator != "onepass_ons":
+            raise ValueError(
+                f"For logistic link, only theta_estimator='onepass_ons' is supported. Got '{theta_estimator}'."
+            )
+        ons_state = init_theta_logistic_onepass_ons(
+            env.d,
+            a0=ons_a0,
+            step_size=ons_step_size,
+            frob_bound=frob_bound,
+            hess_floor=ons_hess_floor,
+            hess_cap=ons_hess_cap,
+        )
+        Theta_hat = np.zeros((env.d, env.d), dtype=float)
+        for phi1_t, phi2_t, r_t in zip(phi1_list, phi2_list, r_list):
+            Theta_hat, _ = update_theta_logistic_onepass_ons(ons_state, phi1_t, phi2_t, r_t)
+    else:
+        if theta_estimator != "cvxpy":
+            raise ValueError(
+                f"For linear link, use theta_estimator='cvxpy'. Got '{theta_estimator}'."
+            )
+        Theta_hat = estimate_theta_cvxpy(
+            phi1_list, phi2_list, r_list,
+            lam=lam,
+            skew=True,
+            frob_bound=frob_bound,
+            link_type=link_type,
+            solver=cvx_solver,
+            max_iters=cvx_max_iters,
+            verbose=cvx_verbose,
+        )
 
     # ---- Nash equilibrium (Eq. 5) ----
     if env.Phi.ndim == 3:

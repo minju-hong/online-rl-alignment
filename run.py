@@ -5,7 +5,7 @@ import argparse
 import json
 import time
 from pathlib import Path
-from typing import Callable, Dict, Any, List, Optional, Tuple
+from typing import Callable, Dict, Any, List
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from env import GBPMEnv, mu_logistic, mu_linear
 import regret as reg
 
-from ours_etc import etc_s2p_cvxpy
+from algo.etc import etc_s2p_cvxpy
 from solvers import compute_rho_E
 
 
@@ -339,7 +339,13 @@ def main():
     fig, ax = plt.subplots(figsize=(7, 4))
     for algo in args.algos:
         Y = np.stack(all_cum[algo], axis=0)
-        reg.plot_mean_cum_regret(t, Y, label=algo, ax=ax)
+        mean = Y.mean(axis=0)
+        if Y.shape[0] > 1:
+            spread = Y.std(axis=0, ddof=1) / np.sqrt(Y.shape[0])
+        else:
+            spread = np.zeros_like(mean)
+        ax.plot(t, mean, label=algo)
+        ax.fill_between(t, mean - spread, mean + spread, alpha=0.2)
     ax.legend()
     fig.tight_layout()
 

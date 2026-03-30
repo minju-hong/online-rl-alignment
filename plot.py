@@ -275,3 +275,330 @@ def plot_combined_regret_shaded(summary_npz_path, save_dir, regret_type="mbr"):
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
     return out_path
+
+
+def plot_theta_frob_error(summary_npz_path, algo_name, save_dir):
+    """
+    Plot ||Theta_hat_t - Theta_star||_F per iteration from summary arrays.
+    Expects key: theta_frob_err__{algo_name} with shape (n_seeds, T) or (T,).
+    """
+    _setup_academic_plot()
+
+    arrays = _load_summary_arrays(summary_npz_path)
+    t = np.asarray(arrays["t"], dtype=int).reshape(-1)
+    key = f"theta_frob_err__{algo_name}"
+    if key not in arrays:
+        raise KeyError(f"Missing key '{key}' in summary file.")
+
+    y = np.asarray(arrays[key], dtype=float)
+    if y.ndim == 1:
+        y = y.reshape(1, -1)
+    if y.ndim != 2 or y.shape[1] != t.shape[0]:
+        raise ValueError(f"Expected '{key}' shape (n_seeds, T), got {y.shape}.")
+
+    mean = y.mean(axis=0)
+    if y.shape[0] > 1:
+        spread = y.std(axis=0, ddof=1) / np.sqrt(y.shape[0])
+    else:
+        spread = np.zeros_like(mean)
+
+    step = max(1, len(t) // 15)
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.errorbar(
+        t, mean, yerr=spread,
+        label=f"{algo_name} theta error",
+        color=COLORS[0],
+        marker=MARKERS[0], markersize=5, markevery=step,
+        capsize=4, capthick=1.5, elinewidth=1.5, errorevery=step,
+        linewidth=1.5
+    )
+    ax.set_xlabel("Time step (t)", fontweight='bold')
+    ax.set_ylabel(r"$\|\hat{\Theta}_t - \Theta^\star\|_F$", fontweight='bold')
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.legend(loc='best')
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{algo_name}_theta_frob_error.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path
+
+
+def plot_loglog_regret_with_fit(
+    summary_npz_path,
+    algo_name,
+    save_dir,
+    regret_type="mbr",
+    fit_start_t=10,
+    suffix: str = "",
+):
+    """
+    Plot cumulative regret on log-log axes and overlay best linear fit in log-space.
+    Returns (out_path, slope, r2).
+    """
+    _setup_academic_plot()
+
+    arrays = _load_summary_arrays(summary_npz_path)
+    t = np.asarray(arrays["t"], dtype=float).reshape(-1)
+    key = _resolve_cum_key(arrays, algo_name, regret_type)
+    y = np.asarray(arrays[key], dtype=float)
+    if y.ndim == 1:
+        y = y.reshape(1, -1)
+    if y.ndim != 2 or y.shape[1] != t.shape[0]:
+        raise ValueError(f"Expected '{key}' shape (n_seeds, T), got {y.shape}.")
+
+    y_mean = y.mean(axis=0)
+    if y.shape[0] > 1:
+        y_spread = y.std(axis=0, ddof=1) / np.sqrt(y.shape[0])
+    else:
+        y_spread = np.zeros_like(y_mean)
+
+    mask = (t >= float(fit_start_t)) & (y_mean > 0)
+    if np.sum(mask) < 3:
+        raise ValueError("Not enough positive points for log-log fit.")
+
+    xlog = np.log(t[mask])
+    ylog = np.log(y_mean[mask])
+    slope, intercept = np.polyfit(xlog, ylog, 1)
+    yhat_log = slope * xlog + intercept
+    ss_tot = float(np.sum((ylog - ylog.mean()) ** 2))
+    ss_res = float(np.sum((ylog - yhat_log) ** 2))
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+
+    yfit = np.exp(intercept) * np.power(t[mask], slope)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    y_lo = np.clip(y_mean - y_spread, 1e-12, None)
+    y_hi = np.clip(y_mean + y_spread, 1e-12, None)
+    ax.loglog(t, y_mean, label=f"{algo_name} mean regret", color=COLORS[0], linewidth=1.8)
+    ax.fill_between(t, y_lo, y_hi, color=COLORS[0], alpha=0.2, label="mean ± SE")
+    ax.loglog(t[mask], yfit, "--", label=f"fit slope={slope:.3f}, R^2={r2:.3f}", color=COLORS[1], linewidth=1.5)
+    ax.set_xlabel("Time step (t)", fontweight="bold")
+    ax.set_ylabel(f"Cumulative {regret_type.upper()} Regret", fontweight="bold")
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{algo_name}_{regret_type}_regret_loglog_fit{suffix}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path, float(slope), float(r2)
+
+
+def plot_eta_vs_slope(eta_to_slope: Mapping[float, float], save_dir, regret_type="mbr"):
+    """
+    Plot slope of log-log regret fit versus eta (log x-axis).
+    """
+    _setup_academic_plot()
+    if not eta_to_slope:
+        raise ValueError("eta_to_slope must not be empty.")
+
+    pairs = sorted((float(k), float(v)) for k, v in eta_to_slope.items())
+    etas = np.asarray([p[0] for p in pairs], dtype=float)
+    slopes = np.asarray([p[1] for p in pairs], dtype=float)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(etas, slopes, marker="o", color=COLORS[0], linewidth=1.7, markersize=6)
+    ax.set_xscale("log")
+    ax.set_xlabel("Regularization Strength (eta)", fontweight="bold")
+    ax.set_ylabel(f"Log-Log Slope of {regret_type.upper()} Regret", fontweight="bold")
+    ax.grid(True, alpha=0.3, linestyle="--")
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"eta_vs_loglog_slope_{regret_type}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path
+
+
+def _fit_regret_vs_features(t: np.ndarray, y: np.ndarray, feature: np.ndarray) -> tuple[float, float, np.ndarray]:
+    """
+    Fit y ~= a * feature + b and return (a, r2, yhat).
+    """
+    X = np.vstack([feature, np.ones_like(feature)]).T
+    beta = np.linalg.lstsq(X, y, rcond=None)[0]
+    yhat = X @ beta
+    ss_tot = float(np.sum((y - np.mean(y)) ** 2))
+    ss_res = float(np.sum((y - yhat) ** 2))
+    r2 = float(1.0 - ss_res / ss_tot) if ss_tot > 0 else float("nan")
+    return float(beta[0]), r2, yhat
+
+
+def plot_regret_with_fit_metrics(
+    summary_npz_path,
+    algo_name,
+    save_dir,
+    regret_type="mbr",
+    fit_start_t=10,
+    suffix: str = "",
+):
+    """
+    Plain t-vs-regret plot with mean±SE across seeds and independent fit metrics:
+      - Reg ~ a_log * log(t) + b
+      - Reg ~ a_sqrt * sqrt(t) + b
+    Returns (out_path, metrics_dict).
+    """
+    _setup_academic_plot()
+
+    arrays = _load_summary_arrays(summary_npz_path)
+    t = np.asarray(arrays["t"], dtype=float).reshape(-1)
+    key = _resolve_cum_key(arrays, algo_name, regret_type)
+    y = np.asarray(arrays[key], dtype=float)
+    if y.ndim == 1:
+        y = y.reshape(1, -1)
+    if y.ndim != 2 or y.shape[1] != t.shape[0]:
+        raise ValueError(f"Expected '{key}' shape (n_seeds, T), got {y.shape}.")
+
+    mean = y.mean(axis=0)
+    if y.shape[0] > 1:
+        spread = y.std(axis=0, ddof=1) / np.sqrt(y.shape[0])
+    else:
+        spread = np.zeros_like(mean)
+
+    mask = t >= float(fit_start_t)
+    if np.sum(mask) < 3:
+        raise ValueError("Not enough points for fit metrics.")
+
+    tt = t[mask]
+    yy_mean = mean[mask]
+    # Keep mean-curve fit for reference
+    slope_log_mean_curve, r2_log_mean_curve, _ = _fit_regret_vs_features(tt, yy_mean, np.log(tt))
+    slope_sqrt_mean_curve, r2_sqrt_mean_curve, _ = _fit_regret_vs_features(tt, yy_mean, np.sqrt(tt))
+
+    # Per-seed fits (preferred statistics across random trials)
+    slope_log_per_seed: list[float] = []
+    r2_log_per_seed: list[float] = []
+    slope_sqrt_per_seed: list[float] = []
+    r2_sqrt_per_seed: list[float] = []
+    for i in range(y.shape[0]):
+        yy = y[i, mask]
+        sl_log, rr_log, _ = _fit_regret_vs_features(tt, yy, np.log(tt))
+        sl_sqrt, rr_sqrt, _ = _fit_regret_vs_features(tt, yy, np.sqrt(tt))
+        slope_log_per_seed.append(float(sl_log))
+        r2_log_per_seed.append(float(rr_log))
+        slope_sqrt_per_seed.append(float(sl_sqrt))
+        r2_sqrt_per_seed.append(float(rr_sqrt))
+
+    slope_log_mean = float(np.mean(slope_log_per_seed))
+    slope_log_std = float(np.std(slope_log_per_seed, ddof=1)) if len(slope_log_per_seed) > 1 else 0.0
+    r2_log_mean = float(np.mean(r2_log_per_seed))
+    r2_log_std = float(np.std(r2_log_per_seed, ddof=1)) if len(r2_log_per_seed) > 1 else 0.0
+    slope_sqrt_mean = float(np.mean(slope_sqrt_per_seed))
+    slope_sqrt_std = float(np.std(slope_sqrt_per_seed, ddof=1)) if len(slope_sqrt_per_seed) > 1 else 0.0
+    r2_sqrt_mean = float(np.mean(r2_sqrt_per_seed))
+    r2_sqrt_std = float(np.std(r2_sqrt_per_seed, ddof=1)) if len(r2_sqrt_per_seed) > 1 else 0.0
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.plot(t, mean, color=COLORS[0], linewidth=1.8, label=f"{algo_name} mean regret")
+    ax.fill_between(t, mean - spread, mean + spread, color=COLORS[0], alpha=0.2, label="mean ± SE")
+    ax.set_xlabel("Time step (t)", fontweight="bold")
+    ax.set_ylabel(f"Cumulative {regret_type.upper()} Regret", fontweight="bold")
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.legend(loc="best")
+
+    metric_text = (
+        f"log(t) fit (seed-avg): slope={slope_log_mean:.4f}±{slope_log_std:.4f}, "
+        f"R^2={r2_log_mean:.4f}±{r2_log_std:.4f}\n"
+        f"sqrt(t) fit (seed-avg): slope={slope_sqrt_mean:.4f}±{slope_sqrt_std:.4f}, "
+        f"R^2={r2_sqrt_mean:.4f}±{r2_sqrt_std:.4f}"
+    )
+    ax.text(
+        0.02, 0.98, metric_text,
+        transform=ax.transAxes,
+        va="top",
+        ha="left",
+        fontsize=9,
+        bbox=dict(boxstyle="round,pad=0.3", alpha=0.15),
+    )
+
+    fig.tight_layout()
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"{algo_name}_{regret_type}_regret_plain_fit{suffix}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+
+    metrics = {
+        # Per-seed arrays
+        "slope_log_t_per_seed": [float(x) for x in slope_log_per_seed],
+        "r2_log_t_per_seed": [float(x) for x in r2_log_per_seed],
+        "slope_sqrt_t_per_seed": [float(x) for x in slope_sqrt_per_seed],
+        "r2_sqrt_t_per_seed": [float(x) for x in r2_sqrt_per_seed],
+        # Aggregates used for cross-eta plots/tables
+        "slope_log_t_mean": slope_log_mean,
+        "slope_log_t_std": slope_log_std,
+        "r2_log_t_mean": r2_log_mean,
+        "r2_log_t_std": r2_log_std,
+        "slope_sqrt_t_mean": slope_sqrt_mean,
+        "slope_sqrt_t_std": slope_sqrt_std,
+        "r2_sqrt_t_mean": r2_sqrt_mean,
+        "r2_sqrt_t_std": r2_sqrt_std,
+        # Mean-curve fit retained for reference
+        "slope_log_t_mean_curve": float(slope_log_mean_curve),
+        "r2_log_t_mean_curve": float(r2_log_mean_curve),
+        "slope_sqrt_t_mean_curve": float(slope_sqrt_mean_curve),
+        "r2_sqrt_t_mean_curve": float(r2_sqrt_mean_curve),
+    }
+    return out_path, metrics
+
+
+def plot_eta_vs_two_r2(
+    eta_to_r2_log: Mapping[float, float],
+    eta_to_r2_sqrt: Mapping[float, float],
+    save_dir,
+    eta_to_r2_log_std: Mapping[float, float] | None = None,
+    eta_to_r2_sqrt_std: Mapping[float, float] | None = None,
+    regret_type="mbr",
+):
+    """
+    Plot eta vs R^2 from:
+      - Reg ~ a log(t)+b
+      - Reg ~ c sqrt(t)+d
+    """
+    _setup_academic_plot()
+    if not eta_to_r2_log or not eta_to_r2_sqrt:
+        raise ValueError("R^2 mappings must not be empty.")
+
+    keys = sorted(set(float(k) for k in eta_to_r2_log) & set(float(k) for k in eta_to_r2_sqrt))
+    etas = np.asarray(keys, dtype=float)
+    r2_log = np.asarray([float(eta_to_r2_log[k]) for k in keys], dtype=float)
+    r2_sqrt = np.asarray([float(eta_to_r2_sqrt[k]) for k in keys], dtype=float)
+    if eta_to_r2_log_std is not None:
+        r2_log_std = np.asarray([float(eta_to_r2_log_std.get(k, 0.0)) for k in keys], dtype=float)
+    else:
+        r2_log_std = np.zeros_like(r2_log)
+    if eta_to_r2_sqrt_std is not None:
+        r2_sqrt_std = np.asarray([float(eta_to_r2_sqrt_std.get(k, 0.0)) for k in keys], dtype=float)
+    else:
+        r2_sqrt_std = np.zeros_like(r2_sqrt)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.errorbar(
+        etas, r2_log, yerr=r2_log_std,
+        marker="o", color=COLORS[0], linewidth=1.7, markersize=6,
+        capsize=3, elinewidth=1.2, label="R^2 for Reg~a log(t)+b"
+    )
+    ax.errorbar(
+        etas, r2_sqrt, yerr=r2_sqrt_std,
+        marker="s", color=COLORS[1], linewidth=1.7, markersize=6,
+        capsize=3, elinewidth=1.2, label="R^2 for Reg~c sqrt(t)+d"
+    )
+    ax.set_xscale("log")
+    ax.set_xlabel("Regularization Strength (eta)", fontweight="bold")
+    ax.set_ylabel(f"R^2 ({regret_type.upper()} regret fits)", fontweight="bold")
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out_path = out_dir / f"eta_vs_r2_{regret_type}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path

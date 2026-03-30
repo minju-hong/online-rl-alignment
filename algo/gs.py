@@ -1,7 +1,12 @@
 import numpy as np
 import cvxpy as cp
 
-from solvers import bilinear_solver_reg 
+from solvers import (
+    bilinear_solver_reg,
+    fixed_point_residual,
+    init_theta_logistic_onepass_ons,
+    update_theta_logistic_onepass_ons,
+)
 
 def estimate_theta_gs_cvxpy(
     phi1_list, 
@@ -15,7 +20,7 @@ def estimate_theta_gs_cvxpy(
     verbose: bool = False,
 ):
     """
-    Constrained MLE for Greedy Sampling supporting both Logistic and Linear links.
+    Constrained CVXPY estimator for the linear link only.
     """
     T_current = len(r_list)
     if T_current == 0:
@@ -34,18 +39,11 @@ def estimate_theta_gs_cvxpy(
         cp.norm(Theta, "fro") <= float(S)
     ]
 
-    if link_type == "logistic":
-        loss_terms = []
-        for t in range(T_current):
-            z_t = cp.sum(cp.multiply(Theta, X_list[t]))
-            loss_terms.append(cp.logistic(z_t) - r[t] * z_t)
-        loss = cp.sum(loss_terms)
-        
-    elif link_type == "linear":
+    if link_type == "linear":
         # Linear link requires Least Squares Loss. 
-        # Target inversion: r_t = 0.5 + 0.25*z => z = 4(r_t - 0.5)
+        # Target inversion: r_t = 0.5 + 0.125*z => z = 8(r_t - 0.5)
         X_stack = np.array([x.flatten(order='F') for x in X_list])
-        targets = 4.0 * (r - 0.5)
+        targets = 8.0 * (r - 0.5)
         z = X_stack @ cp.vec(Theta, order='F')
         loss = cp.sum_squares(z - targets)
         
@@ -85,6 +83,11 @@ def gs_s2p_cvxpy(
     cvx_solver: str = "SCS",
     cvx_max_iters: int = 10_000,
     cvx_verbose: bool = False,
+    theta_estimator: str = "onepass_ons",
+    ons_a0: float = 1.0,
+    ons_step_size: float = 1.0,
+    ons_hess_floor: float = 1e-6,
+    ons_hess_cap: float = 0.25,
 ):
     """
     Greedy Sampling algorithm.
@@ -99,6 +102,9 @@ def gs_s2p_cvxpy(
     
     # Initialize the list to store expected policies
     pi1_seq = []
+    theta_frob_err_seq = []
+    ne_residual_seq = []
+    last_ne_residual = float("nan")
 
     if callable(rho):
         pi1_hat = np.asarray(rho(0), dtype=float) 
@@ -106,7 +112,30 @@ def gs_s2p_cvxpy(
         pi1_hat = np.asarray(rho, dtype=float)
     
     Theta_hat = np.zeros((env.d, env.d))
+    pi2_hat = pi1_hat.copy()
     v_hat, G_hat = None, None
+
+    theta_star = getattr(env, "Theta_star", None)
+    if link_type == "logistic" and theta_estimator != "onepass_ons":
+        raise ValueError(
+            f"For logistic link, only theta_estimator='onepass_ons' is supported. Got '{theta_estimator}'."
+        )
+    if link_type == "linear" and theta_estimator != "cvxpy":
+        raise ValueError(
+            f"For linear link, use theta_estimator='cvxpy'. Got '{theta_estimator}'."
+        )
+
+    ons_state = None
+    if link_type == "logistic" and theta_estimator == "onepass_ons":
+        ons_state = init_theta_logistic_onepass_ons(
+            env.d,
+            a0=ons_a0,
+            step_size=ons_step_size,
+            frob_bound=S,
+            hess_floor=ons_hess_floor,
+            hess_cap=ons_hess_cap,
+            warm_start=Theta_hat,
+        )
 
     for t in range(T):
         # Save the expected policy BEFORE taking the step
@@ -121,16 +150,26 @@ def gs_s2p_cvxpy(
         phi2_list.append(_get_phi(env, x, a2))
         r_list.append(float(r))
 
+        # One-pass ONS updates parameter online each round.
+        if ons_state is not None:
+            Theta_hat, _ = update_theta_logistic_onepass_ons(
+                ons_state, phi1_list[-1], phi2_list[-1], r_list[-1]
+            )
+
         # 3. Update Theta_hat
         if (t + 1) % update_freq == 0:
-            Theta_hat = estimate_theta_gs_cvxpy(
-                phi1_list, phi2_list, r_list,
-                S=S,
-                link_type=link_type,  # Wired this up to the solver
-                solver=cvx_solver,
-                max_iters=cvx_max_iters,
-                verbose=cvx_verbose,
-            )
+            if link_type == "logistic":
+                # Theta_hat already updated online above.
+                pass
+            else:
+                Theta_hat = estimate_theta_gs_cvxpy(
+                    phi1_list, phi2_list, r_list,
+                    S=S,
+                    link_type=link_type,  # Wired this up to the solver
+                    solver=cvx_solver,
+                    max_iters=cvx_max_iters,
+                    verbose=cvx_verbose,
+                )
 
             if env.Phi.ndim == 3:
                 Phi_table = env.Phi.mean(axis=0)   
@@ -145,6 +184,24 @@ def gs_s2p_cvxpy(
                 reg_type=reg_type,
                 ref_policy = rho
             )
+            last_ne_residual = fixed_point_residual(
+                pi1_hat,
+                G_hat,
+                eta=eta,
+                reg_type=reg_type,
+                ref_policy=rho,
+            )
+            if not np.isfinite(last_ne_residual) or last_ne_residual > 1e-4:
+                print(
+                    f"[warn] large NE residual at t={t+1}: "
+                    f"resid={last_ne_residual:.3e}, eta={eta:g}, reg={reg_type}"
+                )
+
+        if theta_star is not None:
+            theta_frob_err_seq.append(float(np.linalg.norm(Theta_hat - theta_star, ord="fro")))
+        else:
+            theta_frob_err_seq.append(float("nan"))
+        ne_residual_seq.append(float(last_ne_residual))
 
     return {
         "Theta_hat": Theta_hat,
@@ -155,4 +212,6 @@ def gs_s2p_cvxpy(
         "G_hat": G_hat,
         "traj": traj,
         "pi1_seq": pi1_seq,  # Returned the sequence for regret evaluation!
+        "theta_frob_err_seq": np.asarray(theta_frob_err_seq, dtype=float),
+        "ne_residual_seq": np.asarray(ne_residual_seq, dtype=float),
     }

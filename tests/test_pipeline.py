@@ -9,7 +9,7 @@ import numpy as np
 
 from env import GBPMEnv, mu_logistic, mu_linear
 import regret as reg
-from ours_etc import etc_s2p_cvxpy
+from algo.etc import etc_s2p_cvxpy
 from solvers import compute_rho_E
 
 
