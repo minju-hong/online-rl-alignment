@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 import sys
 import time
 from pathlib import Path
@@ -22,7 +23,7 @@ from utils import ProgressBar, now_stamp
 # Configuration
 # ---------------------------------------------------------
 T = 1000            
-K = 10
+K = 50
 d = 10             
 r = 1              
 S = 4.0
@@ -31,10 +32,10 @@ instance_seed = 0
 seeds = [0, 1, 2, 3, 4]
 
 # OMG-specific knobs.
-omg_eta = 4.0       
+omg_eta = 1.0       
 reg_type = "reverse_kl"
 lam = 1.0           # Ridge regularization
-alpha = 1.0         # Optimistic bonus scale
+alpha = 0.05        # Optimistic bonus scale
 update_freq = 2
 
 cvx_solver = "SCS"
@@ -80,11 +81,17 @@ def run_one_seed(seed: int) -> dict[str, Any]:
     # Grab both policy sequences from the algorithm
     pi1_seq = np.asarray(out["pi1_seq"], dtype=float)
     pi2_seq = np.asarray(out["pi2_seq"], dtype=float)
+    pi_base_seq = np.asarray(out["pi_base_seq"], dtype=float) # [NEW]
+
+    # [NEW]: Prove the estimator is working!
+    Theta_hat = out["Theta_hat"]
+    param_error = np.linalg.norm(Theta_hat - env.Theta_star, ord="fro")
+    print(f"\nSeed {seed} | Final Param Error: {param_error:.4f}")
 
     g_star = reg.payoff_matrix(env.Phi, env.Theta_star, env.mu)
     
     if eval_regret == "mbr":
-        inc = reg.mbr_regret(pi1_seq, g_star, eta=omg_eta, reg_type=reg_type)
+        inc = reg.mbr_regret(pi_base_seq, g_star, eta=omg_eta, reg_type=reg_type)
     elif eval_regret == "abr":
         inc = reg.abr_regret(pi1_seq, pi2_seq, g_star, eta=omg_eta, reg_type=reg_type)
     else:
@@ -119,10 +126,10 @@ def main() -> None:
     if not seeds:
         raise ValueError("Need at least one seed in `seeds`.")
 
-    run_name = f"d{d}_r{r}_{now_stamp()}"
+    run_name = f"d{d}_r{r}_eta{omg_eta:g}_{now_stamp()}"
     run_dir = base_out_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_dir / f"manifest_d{d}_r{r}.jsonl"
+    manifest_path = run_dir / f"manifest_d{d}_r{r}_eta{omg_eta:g}.jsonl"
 
     meta_common = {
         "tag": "test_omg",
@@ -175,10 +182,13 @@ def main() -> None:
         f"{eval_regret}_inc__{algo_name}": np.stack(all_inc, axis=0),
         f"{eval_regret}_cum__{algo_name}": np.stack(all_cum, axis=0),
     }
-    summary_path = run_dir / f"summary_d{d}_r{r}.npz"
+    summary_path = run_dir / f"summary_d{d}_r{r}_eta{omg_eta:g}.npz"
     reg.save_npz(summary_path, arrays=arrays, meta=meta_common)
 
     single_path = plot.plot_single_algorithm(summary_path, algo_name, run_dir, regret_type=eval_regret)
+    plot_with_eta = run_dir / f"{algo_name}_{eval_regret}_regret_eta{omg_eta:g}.png"
+    shutil.move(str(single_path), str(plot_with_eta))
+    single_path = plot_with_eta
     
     print(f"\n[saved] summary: {summary_path}")
     print(f"[saved] manifest: {manifest_path}")

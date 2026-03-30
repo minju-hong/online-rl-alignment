@@ -208,3 +208,70 @@ def plot_eta_scaling(eta_dict: Mapping[float, float], save_dir, regret_type="mbr
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
     return out_path
+
+
+def plot_combined_regret_shaded(summary_npz_path, save_dir, regret_type="mbr"):
+    """
+    Plots multiple algorithm results on the same figure using shaded regions 
+    instead of error bars to represent the standard error/deviation.
+    """
+    # Uses your existing setup and data loading functions
+    _setup_academic_plot()
+    
+    arrays = _load_summary_arrays(summary_npz_path)
+    t = np.asarray(arrays["t"], dtype=int).reshape(-1)
+    algos = _algo_names_from_summary(arrays, regret_type)
+    
+    if not algos:
+        raise ValueError(f"No algorithms found in summary file for regret type: {regret_type}")
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    
+    for i, algo in enumerate(algos):
+        key = _resolve_cum_key(arrays, algo, regret_type)
+        
+        y = np.asarray(arrays[key], dtype=float)
+        if y.ndim == 1:
+            y = y.reshape(1, -1)
+            
+        mean = y.mean(axis=0)
+        
+        # Note: I kept this as Standard Error to match your original math. 
+        # If you want pure Standard Deviation, remove the division by np.sqrt(y.shape[0])
+        std_spread = y.std(axis=0, ddof=1) / np.sqrt(y.shape[0])
+        
+        color = COLORS[i % len(COLORS)]
+
+        # 1. Plot the solid mean line (removed markers for a cleaner look with shading)
+        ax.plot(
+            t, mean, 
+            label=algo,
+            color=color,
+            linewidth=2.0 
+        )
+        
+        # 2. Shade the area around the mean
+        ax.fill_between(
+            t, 
+            mean - std_spread, 
+            mean + std_spread, 
+            color=color, 
+            alpha=0.2,       # Controls transparency (0.0 is invisible, 1.0 is solid)
+            edgecolor=None   # Removes the harsh border line around the shading
+        )
+
+    ax.set_xlabel("Time step (t)", fontweight='bold')
+    ax.set_ylabel(f"Cumulative {regret_type.upper()} Regret", fontweight='bold')
+    
+    ax.grid(True, alpha=0.3, linestyle='--')
+    ax.legend(loc='best')
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Saves with a new "_shaded" suffix so it doesn't overwrite your original plot
+    out_path = out_dir / f"combined_{regret_type}_regret_shaded.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path

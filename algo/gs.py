@@ -44,9 +44,9 @@ def estimate_theta_gs_cvxpy(
     elif link_type == "linear":
         # Linear link requires Least Squares Loss. 
         # Target inversion: r_t = 0.5 + 0.25*z => z = 4(r_t - 0.5)
-        X_stack = np.array([x.flatten() for x in X_list])
+        X_stack = np.array([x.flatten(order='F') for x in X_list])
         targets = 4.0 * (r - 0.5)
-        z = X_stack @ cp.vec(Theta)
+        z = X_stack @ cp.vec(Theta, order='F')
         loss = cp.sum_squares(z - targets)
         
     else:
@@ -76,7 +76,7 @@ def gs_s2p_cvxpy(
     T: int,
     rho,                    
     mu,                     
-    link_type: str = "logistic",  # <--- THIS IS THE FIX: Added link_type here
+    link_type: str = "logistic", 
     eta: float = 1.0,       
     reg_type: str = 'reverse_kl', 
     S: float = 4.0,         

@@ -20,7 +20,8 @@ def omg_s2p_cvxpy(
     alpha: float = 1.0,     
     update_freq: int = 1,   
     episode_seed: int = 0,
-    cvx_solver: str = "SCS"
+    cvx_solver: str = "SCS",
+    ref_policy = None
 ):
     """
     Optimistic Matrix Game (Nayak et al., 2025) adapted for self-play GBPM.
@@ -49,13 +50,17 @@ def omg_s2p_cvxpy(
     Theta_hat = np.zeros((d, d))
     pi1_hat = np.ones(K) / K
     pi2_hat = np.ones(K) / K
+
+    pi_t = np.ones(K) / K      
+    pi_base_seq = []          
+
     v_hat, G_hat = None, None
 
     for t in range(T):
-        # --- [CHANGE]: Record expected policies BEFORE stepping ---
         pi1_seq.append(pi1_hat.copy())
         pi2_seq.append(pi2_hat.copy())
-        
+        pi_base_seq.append(pi_t.copy()) 
+
         # 1. Take a step using the optimistic policies
         x, a1, a2, r, p = env.step(pi1_hat, pi2_hat)
         traj.append((x, a1, a2, r, p))
@@ -82,7 +87,7 @@ def omg_s2p_cvxpy(
 
             # Step 5 of OMG: Find Base NE (pi_t)
             pi_t, _, v_hat, G_hat = bilinear_solver_reg(
-                Phi_table, Theta_hat, mu=mu, eta=eta, reg_type=reg_type
+                Phi_table, Theta_hat, mu=mu, eta=eta, reg_type=reg_type, ref_policy=ref_policy
             )
             
             G_base = G_hat - 0.5
@@ -92,8 +97,8 @@ def omg_s2p_cvxpy(
             B_t = alpha * np.sqrt(np.clip(variance, 0, None))
 
             # Step 7: Compute Optimistic Best Responses
-            pi1_hat = compute_best_response(pi_t, G_base + B_t, eta, reg_type)
-            pi2_hat = compute_best_response(pi_t, -G_base + B_t.T, eta, reg_type)
+            pi1_hat = compute_best_response(pi_t, G_base + B_t, eta, reg_type, ref_policy=ref_policy)
+            pi2_hat = compute_best_response(pi_t, -G_base + B_t.T, eta, reg_type, ref_policy=ref_policy)
 
     return {
         "Theta_hat": Theta_hat,
@@ -106,4 +111,5 @@ def omg_s2p_cvxpy(
         # --- [CHANGE]: Return the tracked sequences ---
         "pi1_seq": pi1_seq,
         "pi2_seq": pi2_seq,
+        "pi_base_seq": pi_base_seq,
     }

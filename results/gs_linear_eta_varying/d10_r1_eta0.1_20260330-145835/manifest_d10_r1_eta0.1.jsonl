@@ -1,0 +1,5 @@
+{"algo": "gs_cvxpy", "seed": 0, "file": "results/test_gs/d10_r1_eta0.1_20260330-145835/gs_cvxpy/seed_0_d10_r1.npz", "seconds": 155.4104}
+{"algo": "gs_cvxpy", "seed": 1, "file": "results/test_gs/d10_r1_eta0.1_20260330-145835/gs_cvxpy/seed_1_d10_r1.npz", "seconds": 152.5611}
+{"algo": "gs_cvxpy", "seed": 2, "file": "results/test_gs/d10_r1_eta0.1_20260330-145835/gs_cvxpy/seed_2_d10_r1.npz", "seconds": 156.1107}
+{"algo": "gs_cvxpy", "seed": 3, "file": "results/test_gs/d10_r1_eta0.1_20260330-145835/gs_cvxpy/seed_3_d10_r1.npz", "seconds": 146.5473}
+{"algo": "gs_cvxpy", "seed": 4, "file": "results/test_gs/d10_r1_eta0.1_20260330-145835/gs_cvxpy/seed_4_d10_r1.npz", "seconds": 150.0607}

@@ -24,8 +24,8 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
-T = 1000            
-K = 50
+T = 500            
+K = 10
 d = 10
 r = 1
 S = 4.0
@@ -34,9 +34,9 @@ instance_seed = 0
 seeds = [0, 1, 2, 3, 4]
 
 # GS-specific knobs.
-gs_eta = 1       
+gs_eta = 100.0    
 reg_type = "reverse_kl"  
-update_freq = 5    
+update_freq = 2   
 
 # CVX options.
 cvx_solver = "SCS"
@@ -61,7 +61,6 @@ def run_one_seed(seed: int) -> dict[str, Any]:
     env_seed = instance_seed + 1_000_003 * int(seed)
     env = GBPMEnv(K=K, d=d, r=r, S=S, instance_seed=env_seed, mu=mu)
 
-    # --- PROGRESS BAR INJECTION ---
     progress = ProgressBar(T, prefix=f"Running GS Seed {seed:2d}")
     original_step = env.step
     step_counter = [0]
@@ -72,10 +71,9 @@ def run_one_seed(seed: int) -> dict[str, Any]:
         progress.update(step_counter[0])
         return res
         
-    env.step = step_wrapper
-    # ------------------------------
+    env.step = step_wrapper    
 
-    rho = random_policy_uniform(K) # Uniform
+    rho = np.ones(env.K) / env.K # Uniform
     out = gs_s2p_cvxpy(
         env,
         T=T,
@@ -118,7 +116,9 @@ def run_one_seed(seed: int) -> dict[str, Any]:
 def save_per_seed(run_dir: Path, result: dict[str, Any], meta: dict[str, Any]) -> Path:
     algo_dir = run_dir / algo_name
     algo_dir.mkdir(parents=True, exist_ok=True)
-    path = algo_dir / f"seed_{result['seed']}_d{d}_r{r}.npz"
+    path = algo_dir / (
+        f"seed_{result['seed']}_d{d}_r{r}_eta{gs_eta:g}_mu{mu_name}_reg{reg_type}.npz"
+    )
     arrays = {
         "t": np.asarray(result["t"], dtype=int),
         "mbr_inc": np.asarray(result["mbr_inc"], dtype=float),
@@ -138,10 +138,12 @@ def main() -> None:
     if update_freq < 1:
         raise ValueError("Need update_freq >= 1.")
 
-    run_name = f"d{d}_r{r}_eta{gs_eta:g}_{now_stamp()}"
+    run_name = f"d{d}_r{r}_eta{gs_eta:g}_mu{mu_name}_reg{reg_type}_{now_stamp()}"
     run_dir = base_out_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_dir / f"manifest_d{d}_r{r}_eta{gs_eta:g}.jsonl"
+    manifest_path = run_dir / (
+        f"manifest_d{d}_r{r}_eta{gs_eta:g}_mu{mu_name}_reg{reg_type}.jsonl"
+    )
 
     meta_common = {
         "tag": "test_gs",
@@ -193,7 +195,9 @@ def main() -> None:
         f"mbr_inc__{algo_name}": np.stack(all_inc, axis=0),
         f"mbr_cum__{algo_name}": np.stack(all_cum, axis=0),
     }
-    summary_path = run_dir / f"summary_d{d}_r{r}_eta{gs_eta:g}.npz"
+    summary_path = run_dir / (
+        f"summary_d{d}_r{r}_eta{gs_eta:g}_mu{mu_name}_reg{reg_type}.npz"
+    )
     reg.save_npz(summary_path, arrays=arrays, meta=meta_common)
 
     single_path = plot.plot_single_algorithm(summary_path, algo_name, run_dir)

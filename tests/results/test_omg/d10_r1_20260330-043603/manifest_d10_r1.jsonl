@@ -1,0 +1,5 @@
+{"algo": "omg_cvxpy", "seed": 0, "file": "results/test_omg/d10_r1_20260330-043603/omg_cvxpy/seed_0_d10_r1.npz", "seconds": 66.626}
+{"algo": "omg_cvxpy", "seed": 1, "file": "results/test_omg/d10_r1_20260330-043603/omg_cvxpy/seed_1_d10_r1.npz", "seconds": 71.4812}
+{"algo": "omg_cvxpy", "seed": 2, "file": "results/test_omg/d10_r1_20260330-043603/omg_cvxpy/seed_2_d10_r1.npz", "seconds": 69.989}
+{"algo": "omg_cvxpy", "seed": 3, "file": "results/test_omg/d10_r1_20260330-043603/omg_cvxpy/seed_3_d10_r1.npz", "seconds": 70.1607}
+{"algo": "omg_cvxpy", "seed": 4, "file": "results/test_omg/d10_r1_20260330-043603/omg_cvxpy/seed_4_d10_r1.npz", "seconds": 50.9777}

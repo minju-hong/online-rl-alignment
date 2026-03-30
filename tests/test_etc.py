@@ -24,8 +24,8 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------
-T = 600            
-T0 = 150            
+T = 1000            
+T0 = 100            
 K = 10
 d = 20             
 r = 1              
@@ -35,7 +35,7 @@ instance_seed = 0
 seeds = [0, 1, 2, 3, 4]
 
 # ETC-specific knobs.
-lam = 0.1
+lam = 0.05
 frob_bound = None
 cvx_solver = "SCS"
 cvx_max_iters = 10_000
@@ -43,7 +43,7 @@ cvx_verbose = False
 commit_symmetric = True
 
 # --- EVALUATION KNOBS ---
-etc_eta = 4.0          
+etc_eta = 1.0          
 reg_type = "reverse_kl"  
 
 # --- [CHANGE]: The Toggle! ---

@@ -3,7 +3,7 @@
 # - A: actions are indices {0,...,K-1}
 # - phi(a): pre-generated feature table Phi[a] in unit ball (fixed for whole run)
 # - Theta_star: skew-symmetric low-rank-ish matrix
-# - mu: logistic sigmoid
+# - mu: logistic sigmoid or linear
 # - reset_episode(T, episode_seed): pre-generates uniform noise u_t and uses episode RNG for actions
 
 from __future__ import annotations
@@ -16,10 +16,9 @@ def mu_logistic(z):
     # If scalar in -> return Python float; else return ndarray
     return float(out) if np.isscalar(out) else out
 
-
 def mu_linear(z):
     """Linear link mu(z) = 0.5 + 0.25 * z, safely clipped to [0, 1]"""
-    out = 0.5 + 0.25 * z
+    out = 0.5 + 0.125 * z
     out = np.clip(out, 0.0, 1.0)
     return float(out) if np.isscalar(out) else out
 
@@ -56,15 +55,20 @@ class GBPMEnv:
 
         self.rng_instance = np.random.default_rng(int(instance_seed))
 
-        # Known feature table Phi[a] (this plays the role of phi(a), since |X|=1)
-        Phi = self.rng_instance.normal(size=(self.K, self.d))
+        # Select the first K standard basis vectors
+        if self.K > self.d:
+            raise ValueError(f"Cannot select K={self.K} standard basis vectors in d={self.d} dimensions.")
+        self.Phi = np.eye(self.d)[:self.K]
 
-        # Normalize each row to unit norm (handle the measure-zero all-zero row safely)
-        norms = np.linalg.norm(Phi, axis=1, keepdims=True)
-        norms = np.where(norms == 0.0, 1.0, norms)
+        # # Known feature table Phi[a] (this plays the role of phi(a), since |X|=1)
+        # Phi = self.rng_instance.normal(size=(self.K, self.d))
 
-        Phi = 1.0 * Phi / norms   # now every row has norm exactly 1 (up to floating error)
-        self.Phi = Phi
+        # # Normalize each row to unit norm (handle the measure-zero all-zero row safely)
+        # norms = np.linalg.norm(Phi, axis=1, keepdims=True)
+        # norms = np.where(norms == 0.0, 1.0, norms)
+
+        # Phi = 1.0 * Phi / norms   # now every row has norm exactly 1 (up to floating error)
+        # self.Phi = Phi
 
 
         # Ground-truth parameter Theta_star
@@ -74,14 +78,14 @@ class GBPMEnv:
         # Extract the principal directions of the true matrix
         U, _, Vh = np.linalg.svd(self.Theta_star)
         
-        # Plant the top singular vectors into the first two arms
-        if self.K >= 2:
-            self.Phi[0] = U[:, 0]  # The direction of maximum variance
-            self.Phi[1] = Vh[0, :] # The corresponding orthogonal direction
+        # # Plant the top singular vectors into the first two arms
+        # if self.K >= 2:
+        #     self.Phi[0] = U[:, 0]  # The direction of maximum variance
+        #     self.Phi[1] = Vh[0, :] # The corresponding orthogonal direction
             
-            # Ensure they maintain the same feature norm as the rest of the arms
-            self.Phi[0] /= np.linalg.norm(self.Phi[0])
-            self.Phi[1] /= np.linalg.norm(self.Phi[1])
+        #     # Ensure they maintain the same feature norm as the rest of the arms
+        #     self.Phi[0] /= np.linalg.norm(self.Phi[0])
+        #     self.Phi[1] /= np.linalg.norm(self.Phi[1])
 
         # Episode state
         self.u_seq = None
