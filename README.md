@@ -1,4 +1,4 @@
-# Online RL Alignment (GS-only Rebuttal Version)
+# Online RL Alignment
 
 This repository contains a focused implementation of GS-based experiments for online RL alignment in a generalized bilinear preference model (GBPM) setting.
 
