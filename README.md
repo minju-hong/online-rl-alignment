@@ -20,18 +20,9 @@ This repository contains a focused implementation of GS-based experiments for on
 - `plot.py`: plotting and curve-fit analysis helpers.
 - `utils.py`: small utility functions (timestamps, progress bar, etc.).
 
-## Requirements
+## Environment setup
 
-Python 3.11 is recommended.
-
-Install dependencies:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip setuptools wheel
-pip install numpy scipy matplotlib cvxpy
-```
+For the setup refer to [setup_env.sh](setup_env.sh).
 
 ## How to run
 
