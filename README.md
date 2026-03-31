@@ -64,3 +64,7 @@ Typical outputs include:
 - generated plots (regret and fit diagnostics)
 - `eta_summary.json`
 - run manifest `.jsonl`
+
+## Results
+
+See here [results.pdf](./results.pdf)
