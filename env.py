@@ -45,6 +45,7 @@ class GBPMEnv:
             S: float = 4.0, 
             instance_seed: int = 0,
             mu=mu_logistic,
+            phi_mode: str = "basis",
     ):
       
         self.N = 1               # fixed: uncontextual
@@ -54,22 +55,25 @@ class GBPMEnv:
         self.mu = mu
 
         self.rng_instance = np.random.default_rng(int(instance_seed))
+        self.phi_mode = str(phi_mode).strip().lower()
 
-        # Select the first K standard basis vectors
-        if self.K > self.d:
-            self.K = self.d
-            # raise ValueError(f"Cannot select K={self.K} standard basis vectors in d={self.d} dimensions.")
-        self.Phi = np.eye(self.d)[:self.K]
+        # Known feature table Phi[a] (this plays the role of phi(a), since |X|=1)
+        if self.phi_mode == "basis":
+            # Select the first K standard basis vectors
+            if self.K > self.d:
+                self.K = self.d
+            self.Phi = np.eye(self.d)[:self.K]
+        elif self.phi_mode == "random":
+            Phi = self.rng_instance.normal(size=(self.K, self.d))
 
-        # # Known feature table Phi[a] (this plays the role of phi(a), since |X|=1)
-        # Phi = self.rng_instance.normal(size=(self.K, self.d))
-
-        # # Normalize each row to unit norm (handle the measure-zero all-zero row safely)
-        # norms = np.linalg.norm(Phi, axis=1, keepdims=True)
-        # norms = np.where(norms == 0.0, 1.0, norms)
-
-        # Phi = 1.0 * Phi / norms   # now every row has norm exactly 1 (up to floating error)
-        # self.Phi = Phi
+            # Normalize each row to unit norm (handle the measure-zero all-zero row safely)
+            norms = np.linalg.norm(Phi, axis=1, keepdims=True)
+            norms = np.where(norms == 0.0, 1.0, norms)
+            self.Phi = Phi / norms  # now every row has norm 1 (up to floating error)
+        else:
+            raise ValueError(
+                f"Unknown phi_mode='{phi_mode}'. Use 'basis' or 'random'."
+            )
 
 
         # Ground-truth parameter Theta_star

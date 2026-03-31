@@ -555,6 +555,7 @@ def plot_eta_vs_two_r2(
     eta_to_r2_log_std: Mapping[float, float] | None = None,
     eta_to_r2_sqrt_std: Mapping[float, float] | None = None,
     regret_type="mbr",
+    suffix: str = "",
 ):
     """
     Plot eta vs R^2 from:
@@ -598,7 +599,149 @@ def plot_eta_vs_two_r2(
 
     out_dir = Path(save_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"eta_vs_r2_{regret_type}.png"
+    out_path = out_dir / f"eta_vs_r2_{regret_type}{suffix}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path
+
+
+def plot_eta_vs_regret_with_errorbars(
+    eta_to_regret: Mapping[float, float],
+    save_dir,
+    eta_to_regret_std: Mapping[float, float] | None = None,
+    regret_type: str = "mbr",
+    t_value: int | None = None,
+    suffix: str = "",
+):
+    """
+    Plot eta vs cumulative regret with y-error bars (std across seeds).
+    """
+    _setup_academic_plot()
+    if not eta_to_regret:
+        raise ValueError("eta_to_regret must not be empty.")
+
+    keys = sorted(float(k) for k in eta_to_regret)
+    etas = np.asarray(keys, dtype=float)
+    regrets = np.asarray([float(eta_to_regret[k]) for k in keys], dtype=float)
+    if eta_to_regret_std is not None:
+        regret_std = np.asarray([float(eta_to_regret_std.get(k, 0.0)) for k in keys], dtype=float)
+    else:
+        regret_std = np.zeros_like(regrets)
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    ax.errorbar(
+        etas,
+        regrets,
+        yerr=regret_std,
+        marker="o",
+        color=COLORS[0],
+        linewidth=1.7,
+        markersize=6,
+        capsize=3,
+        elinewidth=1.2,
+        label="mean +/- std",
+    )
+    ax.set_xscale("log")
+    ax.set_xlabel("Regularization Strength (eta)", fontweight="bold")
+    if t_value is None:
+        ax.set_ylabel(f"Final Cumulative {regret_type.upper()} Regret", fontweight="bold")
+    else:
+        ax.set_ylabel(
+            f"Cumulative {regret_type.upper()} Regret at t={int(t_value)}",
+            fontweight="bold",
+        )
+    ax.grid(True, alpha=0.3, linestyle="--")
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t_tag = f"_t{int(t_value)}" if t_value is not None else "_final"
+    out_path = out_dir / f"eta_vs_regret_{regret_type}{t_tag}{suffix}.png"
+    fig.savefig(out_path, dpi=300)
+    plt.close(fig)
+    return out_path
+
+
+def plot_eta_vs_regret_theory_bound_loglog(
+    eta_to_regret: Mapping[float, float],
+    save_dir,
+    eta_to_regret_std: Mapping[float, float] | None = None,
+    regret_type: str = "mbr",
+    t_value: int | None = None,
+    suffix: str = "",
+):
+    """
+    Plot empirical eta-vs-regret with two theory guide lines on log-log axes:
+      - O(eta): slope 1 line anchored at first empirical point
+      - O(sqrt(T)): horizontal line at max empirical regret
+    """
+    _setup_academic_plot()
+    if not eta_to_regret:
+        raise ValueError("eta_to_regret must not be empty.")
+
+    keys = sorted(float(k) for k in eta_to_regret)
+    etas = np.asarray(keys, dtype=float)
+    regrets = np.asarray([float(eta_to_regret[k]) for k in keys], dtype=float)
+    if eta_to_regret_std is not None:
+        regret_std = np.asarray([float(eta_to_regret_std.get(k, 0.0)) for k in keys], dtype=float)
+    else:
+        regret_std = np.zeros_like(regrets)
+
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.errorbar(
+        etas,
+        regrets,
+        yerr=regret_std,
+        fmt="-o",
+        color="tab:blue",
+        linewidth=2.0,
+        markersize=6,
+        capsize=4,
+        label="Empirical Regret (mean +/- std)",
+    )
+
+    # Theory line with slope 1 in log-log: y = c * eta
+    c = regrets[0] / etas[0]
+    y_eta = c * etas
+    ax.plot(
+        etas,
+        y_eta,
+        linestyle="--",
+        color="tab:orange",
+        linewidth=2.0,
+        label=r"Theory: O($\eta$) (Slope=1)",
+    )
+
+    # Horizontal theory line at max empirical regret.
+    y_flat = float(np.max(regrets))
+    ax.plot(
+        etas,
+        np.full_like(etas, y_flat),
+        linestyle="--",
+        color="tab:green",
+        linewidth=2.0,
+        label=r"Theory: O($\sqrt{T}$) (Slope=0)",
+    )
+
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.set_xlabel(r"Regularization Strength ($\eta$)", fontweight="bold")
+    if t_value is None:
+        ax.set_ylabel(f"Final Cumulative {regret_type.upper()} Regret", fontweight="bold")
+    else:
+        ax.set_ylabel(
+            f"Cumulative {regret_type.upper()} Regret at t={int(t_value)}",
+            fontweight="bold",
+        )
+    ax.grid(True, which="both", ls="--", alpha=0.3)
+    ax.legend(loc="best")
+    fig.tight_layout()
+
+    out_dir = Path(save_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    t_tag = f"_t{int(t_value)}" if t_value is not None else "_final"
+    out_path = out_dir / f"eta_vs_regret_{regret_type}{t_tag}_theory_bound_loglog{suffix}.png"
     fig.savefig(out_path, dpi=300)
     plt.close(fig)
     return out_path

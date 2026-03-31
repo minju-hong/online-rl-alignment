@@ -26,11 +26,12 @@ from utils import ProgressBar, now_stamp
 # ---------------------------------------------------------
 T = 1000            
 T0 = 100            
-K = 10
-d = 20             
+K = 20
+d = 5             
 r = 1              
-S = 4.0
+S = 5.0
 mu_name = "logistic"  
+phi_mode = "random"  # "basis" or "random"
 instance_seed = 0
 seeds = [0, 1, 2, 3, 4]
 
@@ -56,7 +57,7 @@ base_out_dir = Path("results") / "test_etc"
 def run_one_seed(seed: int) -> dict[str, Any]:
     mu = mu_logistic if mu_name == "logistic" else mu_linear
     env_seed = instance_seed + 1_000_003 * int(seed)
-    env = GBPMEnv(K=K, d=d, r=r, S=S, instance_seed=env_seed, mu=mu)
+    env = GBPMEnv(K=K, d=d, r=r, S=S, instance_seed=env_seed, mu=mu, phi_mode=phi_mode)
 
     rho = compute_rho_E(env.Phi, solver=cvx_solver)[0]
 
@@ -95,6 +96,8 @@ def run_one_seed(seed: int) -> dict[str, Any]:
     pi2_seq = np.asarray(out["pi2_seq"], dtype=float)
 
     g_star = reg.payoff_matrix(env.Phi, env.Theta_star, env.mu)
+    theta_hat = np.asarray(out["Theta_hat"], dtype=float)
+    theta_frob_err = float(np.linalg.norm(theta_hat - env.Theta_star, ord="fro"))
     
     # --- [CHANGE]: Dynamically route the regret calculation ---
     if eval_regret == "mbr":
@@ -111,17 +114,22 @@ def run_one_seed(seed: int) -> dict[str, Any]:
         "t": np.arange(1, T + 1, dtype=int),
         f"{eval_regret}_inc": np.asarray(inc, dtype=float),
         f"{eval_regret}_cum": np.asarray(cum, dtype=float),
+        "theta_frob_err_final": theta_frob_err,
     }
 
 
 def save_per_seed(run_dir: Path, result: dict[str, Any], meta: dict[str, Any]) -> Path:
     algo_dir = run_dir / algo_name
     algo_dir.mkdir(parents=True, exist_ok=True)
-    path = algo_dir / f"seed_{result['seed']}_d{d}_r{r}.npz"
+    path = algo_dir / (
+        f"seed_{result['seed']}_d{d}_r{r}_K{K}_S{S:g}_phi{phi_mode}_"
+        f"mu{mu_name}_reg{reg_type}_eta{etc_eta:g}_lam{lam:g}.npz"
+    )
     arrays = {
         "t": np.asarray(result["t"], dtype=int),
         f"{eval_regret}_inc": np.asarray(result[f"{eval_regret}_inc"], dtype=float),
         f"{eval_regret}_cum": np.asarray(result[f"{eval_regret}_cum"], dtype=float),
+        "theta_frob_err_final": np.asarray(result["theta_frob_err_final"], dtype=float),
     }
     meta2 = dict(meta)
     meta2.update({"algo": algo_name, "seed": int(result["seed"])})
@@ -134,11 +142,19 @@ def main() -> None:
         raise ValueError("Need at least one seed in `seeds`.")
     if not (1 <= T0 < T):
         raise ValueError("Need 1 <= T0 < T.")
+    if phi_mode not in {"basis", "random"}:
+        raise ValueError(f"phi_mode must be 'basis' or 'random'. Got {phi_mode!r}.")
 
-    run_name = f"d{d}_r{r}_{now_stamp()}"
+    run_name = (
+        f"d{d}_r{r}_K{K}_S{S:g}_{phi_mode}_{mu_name}_{reg_type}_"
+        f"eta{etc_eta:g}_lam{lam:g}_{now_stamp()}"
+    )
     run_dir = base_out_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_dir / f"manifest_d{d}_r{r}.jsonl"
+    manifest_path = run_dir / (
+        f"manifest_d{d}_r{r}_K{K}_S{S:g}_phi{phi_mode}_mu{mu_name}_"
+        f"reg{reg_type}_eta{etc_eta:g}_lam{lam:g}.jsonl"
+    )
 
     meta_common = {
         "tag": "test_etc",
@@ -153,7 +169,9 @@ def main() -> None:
         "S": float(S),
         "instance_seed": int(instance_seed),
         "mu": mu_name,
+        "phi_mode": phi_mode,
         "seeds": list(seeds),
+        "etc_eta": float(etc_eta),
         "lam": float(lam),
         "frob_bound": frob_bound,
         "cvx_solver": cvx_solver,
@@ -168,6 +186,7 @@ def main() -> None:
 
     all_inc: list[np.ndarray] = []
     all_cum: list[np.ndarray] = []
+    all_theta_frob_final: list[float] = []
     
     for seed in seeds:
         t0 = time.perf_counter()
@@ -177,6 +196,12 @@ def main() -> None:
         # Dynamically grab the right key
         all_inc.append(np.asarray(result[f"{eval_regret}_inc"], dtype=float))
         all_cum.append(np.asarray(result[f"{eval_regret}_cum"], dtype=float))
+        all_theta_frob_final.append(float(result["theta_frob_err_final"]))
+
+        print(
+            f"[seed {seed:2d}] final theta Frobenius error: "
+            f"{float(result['theta_frob_err_final']):.6f}"
+        )
 
         rec = {
             "algo": algo_name,
@@ -194,8 +219,12 @@ def main() -> None:
         "algos": np.asarray([algo_name], dtype=str),
         f"{eval_regret}_inc__{algo_name}": np.stack(all_inc, axis=0),
         f"{eval_regret}_cum__{algo_name}": np.stack(all_cum, axis=0),
+        f"theta_frob_err_final__{algo_name}": np.asarray(all_theta_frob_final, dtype=float),
     }
-    summary_path = run_dir / f"summary_d{d}_r{r}.npz"
+    summary_path = run_dir / (
+        f"summary_d{d}_r{r}_K{K}_S{S:g}_phi{phi_mode}_mu{mu_name}_"
+        f"reg{reg_type}_eta{etc_eta:g}_lam{lam:g}.npz"
+    )
     reg.save_npz(summary_path, arrays=arrays, meta=meta_common)
 
     # --- [CHANGE]: Pass the regret_type to the plotter so it knows what to plot! ---
@@ -204,6 +233,15 @@ def main() -> None:
     print(f"\n[saved] summary: {summary_path}")
     print(f"[saved] manifest: {manifest_path}")
     print(f"[saved] plot: {single_path}")
+    theta_frob_mean = float(np.mean(all_theta_frob_final))
+    theta_frob_std = (
+        float(np.std(all_theta_frob_final, ddof=1)) if len(all_theta_frob_final) > 1 else 0.0
+    )
+    print(
+        f"[stats] final theta Frobenius error: "
+        f"mean={theta_frob_mean:.6f}, std={theta_frob_std:.6f} "
+        f"(n={len(all_theta_frob_final)})"
+    )
 
 
 if __name__ == "__main__":

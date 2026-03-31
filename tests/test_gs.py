@@ -27,20 +27,21 @@ from utils import ProgressBar, now_stamp
 # Configuration
 # ---------------------------------------------------------
 T = 10000
-K = 20
-d = 5
+K = 40
+d = 10
 r = 1
-S = 5.0
+S = 10.0
 mu_name = "logistic"  # "logistic" or "linear"
+phi_mode = "random"  # "basis" or "random"
 instance_seed = 0
-seeds = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+seeds = list(range(20))
 
 # GS-specific knobs.
 gs_eta = 1000.0    
 reg_type = "reverse_kl"  
 update_freq = 2   
 run_eta_sweep = True
-eta_grid = np.logspace(-2, 2.5, num=10)
+eta_grid = np.logspace(-2, 3, num=10)
 parallel_seeds = True
 n_jobs = max(1, min(8, (os.cpu_count() or 1)))
 
@@ -72,7 +73,7 @@ def one_hot_from_actions(a_seq: np.ndarray, n_arms: int) -> np.ndarray:
 def run_one_seed(seed: int, eta_value: float, *, enable_progress: bool = True) -> dict[str, Any]:
     mu = mu_logistic if mu_name == "logistic" else mu_linear
     env_seed = instance_seed + 1_000_003 * int(seed)
-    env = GBPMEnv(K=K, d=d, r=r, S=S, instance_seed=env_seed, mu=mu)
+    env = GBPMEnv(K=K, d=d, r=r, S=S, instance_seed=env_seed, mu=mu, phi_mode=phi_mode)
 
     if enable_progress:
         progress = ProgressBar(T, prefix=f"Running GS Seed {seed:2d}")
@@ -142,29 +143,6 @@ def run_one_seed_task(task: tuple[int, float]) -> tuple[int, dict[str, Any], flo
     return int(seed), result, float(dt)
 
 
-def _mad_keep_mask(values: np.ndarray, *, z_thresh: float = 3.5, min_keep: int = 3) -> np.ndarray:
-    """
-    Robust outlier mask (True = keep) using modified z-score from MAD.
-    """
-    v = np.asarray(values, dtype=float).reshape(-1)
-    n = int(v.size)
-    if n == 0:
-        return np.zeros(0, dtype=bool)
-    if n <= max(2, int(min_keep)):
-        return np.ones(n, dtype=bool)
-
-    med = float(np.median(v))
-    mad = float(np.median(np.abs(v - med)))
-    if mad <= 1e-12:
-        return np.ones(n, dtype=bool)
-
-    modified_z = 0.6745 * np.abs(v - med) / mad
-    keep = modified_z <= float(z_thresh)
-    if int(np.sum(keep)) < int(min_keep):
-        return np.ones(n, dtype=bool)
-    return keep
-
-
 def save_per_seed(run_dir: Path, result: dict[str, Any], meta: dict[str, Any], eta_value: float) -> Path:
     algo_dir = run_dir / algo_name
     algo_dir.mkdir(parents=True, exist_ok=True)
@@ -193,14 +171,12 @@ def main() -> None:
         raise ValueError("Need update_freq >= 1.")
     if n_jobs < 1:
         raise ValueError("Need n_jobs >= 1.")
+    if phi_mode not in {"basis", "random"}:
+        raise ValueError(f"phi_mode must be 'basis' or 'random'. Got {phi_mode!r}.")
 
-    if run_eta_sweep:
-        run_name = (
-            f"d{d}_r{r}_etaSweep_{eta_grid[0]:g}_to_{eta_grid[-1]:g}_"
-            f"mu{mu_name}_reg{reg_type}_est{theta_estimator}_{now_stamp()}"
-        )
-    else:
-        run_name = f"d{d}_r{r}_eta{gs_eta:g}_mu{mu_name}_reg{reg_type}_est{theta_estimator}_{now_stamp()}"
+    run_name = (
+        f"d{d}_r{r}_K{K}_S{S:g}_{phi_mode}_{mu_name}_{reg_type}_{now_stamp()}"
+    )
     run_dir = base_out_dir / run_name
     run_dir.mkdir(parents=True, exist_ok=True)
     if run_eta_sweep:
@@ -224,6 +200,7 @@ def main() -> None:
         "S": float(S),
         "instance_seed": int(instance_seed),
         "mu": mu_name,
+        "phi_mode": phi_mode,
         "seeds": list(seeds),
         "eta": float(gs_eta),
         "run_eta_sweep": bool(run_eta_sweep),
@@ -244,10 +221,12 @@ def main() -> None:
         "pi1_seq_note": "Expected policy probabilities.",
     }
 
-    eta_to_r2_log_t: dict[float, float] = {}
-    eta_to_r2_sqrt_t: dict[float, float] = {}
-    eta_to_r2_log_t_std: dict[float, float] = {}
-    eta_to_r2_sqrt_t_std: dict[float, float] = {}
+    eta_to_r2_log_t_raw: dict[float, float] = {}
+    eta_to_r2_sqrt_t_raw: dict[float, float] = {}
+    eta_to_r2_log_t_raw_std: dict[float, float] = {}
+    eta_to_r2_sqrt_t_raw_std: dict[float, float] = {}
+    eta_to_final_regret: dict[float, float] = {}
+    eta_to_final_regret_std: dict[float, float] = {}
     eta_summary_rows: list[dict[str, Any]] = []
 
     sweep_values = [float(gs_eta)] if not run_eta_sweep else [float(x) for x in eta_grid]
@@ -329,20 +308,19 @@ def main() -> None:
 
         finals = [float(y[-1]) for y in all_cum]
         ne_end = [float(y[-1]) for y in all_ne_resid]
+        eta_to_final_regret[float(eta_value)] = float(np.mean(finals))
+        eta_to_final_regret_std[float(eta_value)] = (
+            float(np.std(finals, ddof=1)) if len(finals) > 1 else 0.0
+        )
         r2_log_vals = np.asarray(fit_metrics["r2_log_t_per_seed"], dtype=float)
         r2_sqrt_vals = np.asarray(fit_metrics["r2_sqrt_t_per_seed"], dtype=float)
-        keep_log = _mad_keep_mask(r2_log_vals, z_thresh=3.5, min_keep=3)
-        keep_sqrt = _mad_keep_mask(r2_sqrt_vals, z_thresh=3.5, min_keep=3)
-        r2_log_plot = r2_log_vals[keep_log]
-        r2_sqrt_plot = r2_sqrt_vals[keep_sqrt]
-
-        eta_to_r2_log_t[float(eta_value)] = float(np.mean(r2_log_plot))
-        eta_to_r2_sqrt_t[float(eta_value)] = float(np.mean(r2_sqrt_plot))
-        eta_to_r2_log_t_std[float(eta_value)] = (
-            float(np.std(r2_log_plot, ddof=1)) if r2_log_plot.size > 1 else 0.0
+        eta_to_r2_log_t_raw[float(eta_value)] = float(np.mean(r2_log_vals))
+        eta_to_r2_sqrt_t_raw[float(eta_value)] = float(np.mean(r2_sqrt_vals))
+        eta_to_r2_log_t_raw_std[float(eta_value)] = (
+            float(np.std(r2_log_vals, ddof=1)) if r2_log_vals.size > 1 else 0.0
         )
-        eta_to_r2_sqrt_t_std[float(eta_value)] = (
-            float(np.std(r2_sqrt_plot, ddof=1)) if r2_sqrt_plot.size > 1 else 0.0
+        eta_to_r2_sqrt_t_raw_std[float(eta_value)] = (
+            float(np.std(r2_sqrt_vals, ddof=1)) if r2_sqrt_vals.size > 1 else 0.0
         )
         eta_summary_rows.append(
             {
@@ -362,12 +340,10 @@ def main() -> None:
                 "r2_log_t_per_seed": fit_metrics["r2_log_t_per_seed"],
                 "slope_sqrt_t_per_seed": fit_metrics["slope_sqrt_t_per_seed"],
                 "r2_sqrt_t_per_seed": fit_metrics["r2_sqrt_t_per_seed"],
-                "plot_r2_log_t_num_kept": int(np.sum(keep_log)),
-                "plot_r2_sqrt_t_num_kept": int(np.sum(keep_sqrt)),
-                "plot_r2_log_t_mean_filtered": eta_to_r2_log_t[float(eta_value)],
-                "plot_r2_log_t_std_filtered": eta_to_r2_log_t_std[float(eta_value)],
-                "plot_r2_sqrt_t_mean_filtered": eta_to_r2_sqrt_t[float(eta_value)],
-                "plot_r2_sqrt_t_std_filtered": eta_to_r2_sqrt_t_std[float(eta_value)],
+                "plot_r2_log_t_mean_raw": eta_to_r2_log_t_raw[float(eta_value)],
+                "plot_r2_log_t_std_raw": eta_to_r2_log_t_raw_std[float(eta_value)],
+                "plot_r2_sqrt_t_mean_raw": eta_to_r2_sqrt_t_raw[float(eta_value)],
+                "plot_r2_sqrt_t_std_raw": eta_to_r2_sqrt_t_raw_std[float(eta_value)],
                 "slope_log_t_mean_curve": float(fit_metrics["slope_log_t_mean_curve"]),
                 "r2_log_t_mean_curve": float(fit_metrics["r2_log_t_mean_curve"]),
                 "slope_sqrt_t_mean_curve": float(fit_metrics["slope_sqrt_t_mean_curve"]),
@@ -379,13 +355,28 @@ def main() -> None:
             }
         )
 
-    r2_plot_path = plot.plot_eta_vs_two_r2(
-        eta_to_r2_log_t,
-        eta_to_r2_sqrt_t,
+    r2_plot_raw_path = plot.plot_eta_vs_two_r2(
+        eta_to_r2_log_t_raw,
+        eta_to_r2_sqrt_t_raw,
         run_dir,
-        eta_to_r2_log_t_std,
-        eta_to_r2_sqrt_t_std,
+        eta_to_r2_log_t_raw_std,
+        eta_to_r2_sqrt_t_raw_std,
         regret_type="mbr",
+        suffix="_raw",
+    )
+    regret_vs_eta_path = plot.plot_eta_vs_regret_with_errorbars(
+        eta_to_final_regret,
+        run_dir,
+        eta_to_regret_std=eta_to_final_regret_std,
+        regret_type="mbr",
+        t_value=int(T),
+    )
+    regret_vs_eta_theory_loglog_path = plot.plot_eta_vs_regret_theory_bound_loglog(
+        eta_to_final_regret,
+        run_dir,
+        eta_to_regret_std=eta_to_final_regret_std,
+        regret_type="mbr",
+        t_value=int(T),
     )
     eta_json = run_dir / "eta_summary.json"
     with open(eta_json, "w", encoding="utf-8") as f:
@@ -402,7 +393,9 @@ def main() -> None:
         )
 
     print(f"\n[saved] manifest: {manifest_path}")
-    print(f"[saved] eta-vs-R2 plot: {r2_plot_path}")
+    print(f"[saved] eta-vs-R2 plot (raw): {r2_plot_raw_path}")
+    print(f"[saved] eta-vs-regret plot (t={T}): {regret_vs_eta_path}")
+    print(f"[saved] eta-vs-regret theory log-log plot (t={T}): {regret_vs_eta_theory_loglog_path}")
     print(f"[saved] eta summary json: {eta_json}")
 
 if __name__ == "__main__":
